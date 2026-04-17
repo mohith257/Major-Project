@@ -451,4 +451,4 @@ This project is developed for academic and research purposes at **JSS Academy of
 
 ---
 
-<p align="center">Built by Mohith Kumar M & Anusha B | JSS ATE, Bengaluru</p>
+<p align="center">Built with ❤️ by Mohith Kumar M & Anusha B | JSS ATE, Bengaluru</p>
