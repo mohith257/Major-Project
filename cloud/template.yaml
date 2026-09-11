@@ -1,0 +1,291 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Agentic FedGrid cloud orchestrator -- serverless FedAvg aggregator.
+  4 edge devices POST locally-retrained LoRA adapter weights here; this
+  stack coordinates synchronous rounds and averages them. See memory.md
+  §6 for the full design and why each piece exists.
+
+  NOT YET DEPLOYED as of writing -- run `sam validate` and `sam build`
+  before `sam deploy`, and expect to fix small things on the first pass
+  (this has been written carefully but not exercised against real AWS).
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 15
+    MemorySize: 256
+    Environment:
+      Variables:
+        ROUND_STATE_TABLE: !Ref RoundStateTable
+        ROUNDS_TABLE: !Ref RoundsTable
+        INCIDENTS_TABLE: !Ref IncidentsTable
+        WEIGHTS_BUCKET: !Ref WeightsBucket
+        EXPECTED_DEVICES: "4"
+        # Compressed for the live demo (memory.md §8) -- a real deployment
+        # would use minutes, not seconds.
+        ROUND_TIMEOUT_SECONDS: "30"
+
+Resources:
+  FedGridApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: demo
+      Auth:
+        ApiKeyRequired: true
+
+  WeightsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Single-item table (partition key is always "GLOBAL") holding the
+  # in-progress round's coordination state -- see shared/store.py.
+  RoundStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+
+  # History table for the dashboard -- one item per completed round.
+  RoundsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: round
+          AttributeType: N
+      KeySchema:
+        - AttributeName: round
+          KeyType: HASH
+
+  IncidentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: device_id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: N
+      KeySchema:
+        - AttributeName: device_id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+
+  # All 4 functions share CodeUri: ./ (the cloud/ directory itself, i.e.
+  # everything template.yaml sits next to) rather than each function's own
+  # subfolder -- shared/ has to be inside every function's deployed zip
+  # for `from shared import store` to resolve at runtime, and CodeUri
+  # only packages what's under it. Slightly wasteful (each zip carries
+  # all 4 handlers' code) but correct and simple; a Lambda Layer would be
+  # the "proper" fix but is unnecessary complexity at this scale.
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: ingest_lambda.handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RoundStateTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RoundsTable
+        - S3CrudPolicy:
+            BucketName: !Ref WeightsBucket
+      Events:
+        Update:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FedGridApi
+            Path: /update
+            Method: post
+
+  ModelFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: model_lambda.handler.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RoundStateTable
+        - S3ReadPolicy:
+            BucketName: !Ref WeightsBucket
+      Events:
+        GetModel:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FedGridApi
+            Path: /model
+            Method: get
+
+  IncidentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: incident_lambda.handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IncidentsTable
+      Events:
+        PostIncident:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FedGridApi
+            Path: /incidents
+            Method: post
+
+  RoundsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: rounds_lambda.handler.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RoundsTable
+      Events:
+        GetRounds:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FedGridApi
+            Path: /rounds
+            Method: get
+
+  IncidentsReadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: incidents_read_lambda.handler.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref IncidentsTable
+      Events:
+        GetIncidents:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FedGridApi
+            Path: /incidents
+            Method: get
+
+  StragglerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: aggregate_lambda.handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RoundStateTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RoundsTable
+        - S3CrudPolicy:
+            BucketName: !Ref WeightsBucket
+      Events:
+        ScheduledCheck:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 minute)
+            Enabled: true
+
+  # -- Per-device API keys (memory.md §5): each EC2 node gets its own
+  # revocable credential, separate from SSM access. One usage plan ties
+  # all 4 to the API + a basic throttle.
+  #
+  # NOTE: the DependsOn below targets the implicit Stage resource SAM
+  # creates for FedGridApi. Confirmed via `sam validate --lint` (SAM CLI
+  # 1.166.1) that the generated logical id is `FedGridApidemoStage`
+  # (lowercase "demo", not "FedGridApiDemoStage" as the naming convention
+  # would suggest) -- re-check with `sam validate --lint` if the SAM CLI
+  # version changes, since this id isn't guaranteed stable across versions.
+  Device1ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn: FedGridApidemoStage
+    Properties:
+      Name: fedgrid-device1
+      Enabled: true
+
+  Device2ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn: FedGridApidemoStage
+    Properties:
+      Name: fedgrid-device2
+      Enabled: true
+
+  Device3ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn: FedGridApidemoStage
+    Properties:
+      Name: fedgrid-device3
+      Enabled: true
+
+  Device4ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn: FedGridApidemoStage
+    Properties:
+      Name: fedgrid-device4
+      Enabled: true
+
+  FedGridUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: FedGridApidemoStage
+    Properties:
+      ApiStages:
+        - ApiId: !Ref FedGridApi
+          Stage: demo
+      Throttle:
+        RateLimit: 10
+        BurstLimit: 20
+
+  Device1UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref Device1ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref FedGridUsagePlan
+
+  Device2UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref Device2ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref FedGridUsagePlan
+
+  Device3UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref Device3ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref FedGridUsagePlan
+
+  Device4UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref Device4ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref FedGridUsagePlan
+
+Outputs:
+  ApiUrl:
+    Description: Base URL each edge device's CloudComms should target
+    Value: !Sub "https://${FedGridApi}.execute-api.${AWS::Region}.amazonaws.com/demo"
+  Device1ApiKeyId:
+    Value: !Ref Device1ApiKey
+  Device2ApiKeyId:
+    Value: !Ref Device2ApiKey
+  Device3ApiKeyId:
+    Value: !Ref Device3ApiKey
+  Device4ApiKeyId:
+    Value: !Ref Device4ApiKey

@@ -1,0 +1,10 @@
+torch>=2.1
+numpy
+pandas
+scikit-learn
+requests
+boto3
+
+# dev-only: needed to run cloud/local_simulation.py (mocks DynamoDB/S3
+# locally, never touches real AWS or ships to edge devices/Lambda)
+moto[dynamodb,s3]
