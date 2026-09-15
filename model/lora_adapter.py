@@ -44,3 +44,15 @@ class LoRALinear(nn.Module):
         with torch.no_grad():
             self.lora_A.copy_(state["lora_A"])
             self.lora_B.copy_(state["lora_B"])
+
+    def merge_and_reset(self):
+        """Fold the current LoRA delta into the frozen base, then reset the
+        adapter to zero-effect (lora_B=0). Call once, right after the base
+        was actually trained (jointly with A/B, during central
+        pretraining) -- this is the textbook LoRA-after-pretrain workflow:
+        adapt a real trained weight starting from zero delta, not a
+        permanently-random base wearing a trained correction."""
+        with torch.no_grad():
+            self.base.weight += self.scale * (self.lora_B @ self.lora_A)
+        nn.init.normal_(self.lora_A, std=0.01)
+        nn.init.zeros_(self.lora_B)

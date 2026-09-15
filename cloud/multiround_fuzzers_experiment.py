@@ -57,7 +57,10 @@ from model.tabular_transformer import TabularTransformer  # noqa: E402
 
 DEVICE_IDS = ["device1", "device2", "device3", "device4"]
 CUMULATIVE_FRACS = [0.25, 0.5, 0.75, 1.0]  # % of device1's 12,729 Fuzzers rows revealed, by round
-SHUFFLE_SEED = 123  # order in which device1's Fuzzers rows are "encountered"
+# order in which device1's Fuzzers rows are "encountered" -- canonical
+# reported seed is 123; override via `python -m cloud.multiround_fuzzers_experiment 456`
+# for a robustness re-run (memory.md §11f addendum).
+SHUFFLE_SEED = int(sys.argv[1]) if len(sys.argv) > 1 else 123
 
 
 def _provision_aws_resources():

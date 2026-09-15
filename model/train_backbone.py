@@ -61,8 +61,14 @@ def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
         n_continuous=len(CANONICAL_CONTINUOUS),
         cat_cardinalities=encoder.cardinalities(),
     ).to(device)
+    # LoRALinear freezes the FFN base unconditionally at construction --
+    # without this, central pretraining would never touch it, leaving it
+    # at random init for the model's entire lifetime. Undone by
+    # merge_and_reset_adapters() + freeze_backbone() after training.
+    model.unfreeze_ffn_base_for_pretraining()
 
-    # Full model trains here -- freeze_backbone() only gets called AFTER
+    # Full model (base + LoRA deltas together) trains here.
+    # merge_and_reset_adapters() + freeze_backbone() only get called AFTER
     # this loop, once, right before the checkpoint is saved.
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
@@ -90,6 +96,7 @@ def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
             f"train_loss={total_loss / n:.4f}  val_acc={val_acc:.4f}"
         )
 
+    model.merge_and_reset_adapters()
     model.freeze_backbone()
     torch.save(
         {

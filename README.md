@@ -9,11 +9,11 @@ is just orientation.
 
 ## Status
 
-Scaffolding stage. Model + agent-controller code is written; cloud
-infrastructure and dashboard are not yet started. Nothing runs end-to-end
-until the datasets (UNSW-NB15 + ToN_IoT) are downloaded into `data/raw/`
-and `data/scripts/partition_data.py`'s column mappings are verified
-against the real CSV headers.
+End-to-end and running for real. Datasets downloaded and partitioned,
+backbone trained, cloud stack (`fedgrid`, ap-south-1) deployed via SAM,
+dashboard built, and all 4 EC2 edge nodes are running the agent against
+the live API (see `memory.md` §11g). Check `memory.md`'s Open TODOs (§10)
+for what's still outstanding before the report/demo.
 
 ## Layout
 

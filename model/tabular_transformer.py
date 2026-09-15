@@ -55,6 +55,25 @@ class TabularTransformer(nn.Module):
         pooled = encoded.mean(dim=1)
         return self.head(pooled)
 
+    def merge_and_reset_adapters(self):
+        """Call once, right after full central pretraining (base + LoRA
+        deltas trained jointly), before freeze_backbone(). See
+        LoRALinear.merge_and_reset for why this step matters."""
+        for layer in self.encoder.layers:
+            layer.linear1.merge_and_reset()
+            layer.linear2.merge_and_reset()
+
+    def unfreeze_ffn_base_for_pretraining(self):
+        """LoRALinear.__init__ freezes the FFN base unconditionally, which
+        would otherwise leave it at its random init through central
+        pretraining. Call this once right after construction, before
+        pretraining, so the base actually gets real gradients -- undone by
+        merge_and_reset_adapters() + freeze_backbone() afterward."""
+        for layer in self.encoder.layers:
+            for module in (layer.linear1, layer.linear2):
+                for p in module.base.parameters():
+                    p.requires_grad = True
+
     def freeze_backbone(self):
         """Call once, right after central pretraining, before shipping the
         model to edge devices. Everything except the LoRA adapters and the

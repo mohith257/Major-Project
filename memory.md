@@ -5,6 +5,16 @@ superseding the original synopsis wherever the two disagree (the synopsis
 was the pitch; this is the as-built design). Update this file whenever a
 real decision is made — don't let it drift out of sync with the code.
 
+**READ §12 FIRST if citing any number from §4/§7/§11*.** A real bug (LoRA
+base weights frozen at random init, never trained, from the very first
+commit through 2026-09-14) meant every accuracy/Fuzzers-recovery/FPR
+number in this file before that date was measured against a backbone
+whose FFN sublayers were permanently random. Fixed 2026-09-14, backbone
+retrained, everything re-measured. Numbers in §4/§7/§11* are kept for
+historical record (they document real debugging work) but are
+SUPERSEDED — cite §12's numbers in the paper/report, not the earlier
+ones.
+
 ## 1. Identity
 
 - **Project**: Agentic FedGrid — Autonomous Privacy-Preserving Intrusion
@@ -397,6 +407,9 @@ cloud/
                           # 4 independent devices -- see §11d, this is what proved the
                           # federated PROCESS (not just its ingredients) actually works
                           # NOT DEPLOYED to real AWS -- see §6 for what's verified vs not
+run_edge_node.py         # entrypoint that actually runs on the 4 EC2 boxes --
+                          # wires EdgeAgent + tools together against the real
+                          # deployed API, env-var configured, see §11g.
 dashboard/               # React + Vite + Recharts, built and verified (`npm run build` succeeds)
   src/api.js              # GET /rounds, GET /incidents only -- dashboard never writes
   src/mockData.js          # fallback data + loud "DEMO DATA" banner when API unreachable
@@ -519,6 +532,39 @@ maybe different `CUMULATIVE_FRACS`) to check whether the round-2 dip
 reproduces or was a one-off from that particular random hard-example
 sampling draw.
 
+**Seed-variation re-run — done (2026-09-14), dip does NOT reproduce**:
+`SHUFFLE_SEED=456` (vs. the original 123), same 4 rounds, same real
+Lambda handlers + moto-mocked AWS, nothing else changed:
+
+| round | cum. Fuzzers revealed | official-test Fuzzers recall | replay-set Fuzzers acc | general acc | general FPR |
+|---|---|---|---|---|---|
+| 0 (before) | 0% | 36.44% | 23.15% | 87.29% | 12.53% |
+| 1 | 25% | 37.66% | 26.14% | 87.71% | 12.06% |
+| 2 | 50% | 48.33% | 37.89% | 85.84% | 19.12% |
+| 3 | 75% | 48.15% | 38.28% | 85.69% | 18.99% |
+| 4 | 100% | **64.42%** | **58.33%** | 84.09% | 26.57% |
+
+General accuracy declines **monotonically** across all 4 rounds
+(87.71%→85.84%→85.69%→84.09%) with no dip-then-recover pattern — the
+seed-123 round-2 collapse-to-63.89%-then-recovery (§11f) is confirmed to
+be **a one-off artifact of that specific hard-example sampling draw, not
+a reproducible compounding-drift bug**. Both Fuzzers metrics again climb
+monotonically and land in a similar range to the seed-123 run (+27.98pt
+official-test, +35.18pt replay-set here vs. +22.17pt/+28.29pt with seed
+123) — consistent story, not seed-dependent luck. FPR climbs steadily
+with no anomalous spike either. `SHUFFLE_SEED` reverted to `123` in
+`cloud/multiround_fuzzers_experiment.py` afterward (kept as the canonical
+documented seed for the headline §11f numbers) — this run's script diff
+was seed-only, no other changes.
+
+**Conclusion for the report**: cite the seed-123 numbers as the headline
+progressive-recovery result (§11f), and this seed-456 re-run as the
+robustness check — safe to say the monotonic Fuzzers-recovery trend is
+real and seed-independent; the round-2 general-accuracy dip specifically
+was noise from one sampling draw, not a limitation worth a paragraph in
+the report (downgrade it from "open question" to "checked, doesn't
+reproduce").
+
 ## 10. Open TODOs / pending decisions
 
 - [x] Download UNSW-NB15 + ToN_IoT — done 2026-08-23, both direct SharePoint
@@ -565,6 +611,11 @@ sampling draw.
       it doesn't run indefinitely.
 - [x] EC2 provisioning + SSM setup for the 4 nodes — **done 2026-09-11**,
       see §11g for instance IDs and what happened.
+- [x] Push edge code onto the 4 EC2 nodes + wire real API keys — **done
+      2026-09-14**, see §11g "Code deployed and running for real" for the
+      two real bugs hit (missing requirements.txt, tmpfs-too-small torch
+      install) and the DynamoDB-scan proof it's genuinely working end to
+      end. Instances left running after this — stop them when done.
 - [x] Multi-round Fuzzers-recovery experiment — run 2026-09-10, see §11f.
       Real result: official-test Fuzzers recall 36.44%→58.61% (+22.17pt)
       across 4 progressive rounds, replay-set 23.15%→51.44% (+28.29pt),
@@ -573,9 +624,10 @@ sampling draw.
       (87.3%→63.9%→85.7% recovery) — plausible compounding client drift
       over 4+ rounds, NOT yet confirmed reproducible with a different seed.
       `cloud/multiround_fuzzers_experiment.py`.
-- [ ] Re-run the multi-round Fuzzers experiment with a different
-      `SHUFFLE_SEED` to check whether the round-2 general-accuracy dip
-      (§11f) reproduces or was a one-off.
+- [x] Re-run the multi-round Fuzzers experiment with a different
+      `SHUFFLE_SEED` — done 2026-09-14, dip does NOT reproduce (monotonic
+      decline instead), confirmed a one-off sampling artifact, not a real
+      bug. See §11f addendum for the full seed-456 table.
 - [x] React dashboard — built, `npm run build` verified clean
       (dashboard/dist/, gitignored). Falls back to labeled mock data if
       the API isn't reachable, so it's previewable now (`npm run dev`)
@@ -599,8 +651,12 @@ sampling draw.
       authoritative Fuzzers number**: 23.2%→73.9% (+50.7pt), DRI 0.66 --
       supersedes the earlier 21.3%→58.3% figure (backbone was retrained
       on the updated pretrain pool composition).
-- [ ] Decide exact `d_model`/`n_heads`/`n_layers` for the transformer once
-      real feature counts are known from the canonical schema.
+- [x] Decide exact `d_model`/`n_heads`/`n_layers` for the transformer —
+      stale checkbox, already resolved in practice: `d_model=32,
+      n_heads=4, n_layers=2` (`model/tabular_transformer.py`) is what
+      `backbone_frozen.pt` was actually trained, evaluated (§11b/§11d),
+      and deployed with. Closed out 2026-09-14, no architecture change
+      needed.
 
 ## 11a. Literature/objective alignment audit (2026-08-23) and fixes in progress
 
@@ -902,16 +958,228 @@ design exactly:
   from scratch next session; just `aws ec2 start-instances` on these 4
   ids.
 
-**Next step, not yet done**: push `edge_agent/` + `model/`
-(`backbone_frozen.pt` included) + Python deps onto each instance —
-there's no SSH, so this has to go through **SSM Run Command** (or
-SSM-backed `aws ssm send-command` / S3-staged install script), plus wire
-each device's own API Gateway key (`Device1ApiKeyId`..`Device4ApiKeyId`
-from the `fedgrid` stack outputs) and the live `ApiUrl`
-(`https://8k75vfanr6.execute-api.ap-south-1.amazonaws.com/demo`) into
-each device's `edge_agent/comms.py` config. Nothing has been copied onto
-these instances yet — they're bare AL2023 boxes with SSM connectivity
-only so far.
+**Code deployed and running for real — done (2026-09-14)**. What actually
+happened, since it took a few real bugs to get here:
+
+- **`run_edge_node.py` (new, repo root) had to be written first** — no
+  script anywhere actually wired `EdgeAgent` + its tools (model, trainer,
+  drift monitors, actuator, `CloudComms`) into a running process against
+  the real API. Every prior script (`cloud/local_simulation.py`,
+  `cloud/multiround_fuzzers_experiment.py`) only drove these pieces
+  in-process against moto-mocked AWS. Env-var configured (`DEVICE_ID`,
+  `API_BASE_URL`, `API_KEY`, `ROW_RATE_HZ`, `REAL_BLOCK`, optional
+  `REPLAY_CSV`/`REPLAY_EVERY` to inject `holdout_replay.csv` rows into
+  devices 2-4's stream for the live demo per §8) so the identical script
+  runs unmodified on all 4 boxes. Replays the device's own local
+  partition, shuffled, cycling indefinitely at `ROW_RATE_HZ`.
+- **Per-device deploy bundles, not one shared bundle**: each of the 4
+  tarballs staged to `s3://fedgrid-weightsbucket-kwh3ffbpsq5a/deploy/
+  device{1..4}.tar.gz` contains only that device's own
+  `device{N}_train.csv`, never the other 3 devices' data — bundling all 4
+  onto every box would have undercut the project's own "device only ever
+  has its own local data" privacy claim, even though nothing crosses to
+  the cloud either way.
+- **Real API keys never touched Claude's context or a terminal echo**:
+  the sandbox correctly refused both `aws apigateway get-api-key
+  --include-value` (credential materialization) and the IAM policy grant
+  needed for instances to read them. Both were done by the user directly
+  in their own shell: (1) an inline IAM policy on `fedgrid-edge-node-role`
+  granting `ssm:GetParameter(s)` on `/fedgrid/*`, `kms:Decrypt` (via the
+  default SSM-managed key), and `s3:GetObject` on the `deploy/` prefix;
+  (2) each device's real key value written straight into SSM Parameter
+  Store as `SecureString` (`/fedgrid/device{1..4}/api_key`,
+  `/fedgrid/api_base_url` as plain `String`). The bootstrap script fetches
+  these itself at install time via the instance's own role and writes
+  them into a `chmod 600` env file (`/opt/fedgrid/agent.env`), not into
+  the (world-readable, 644) systemd unit file.
+- **Two real bugs hit and fixed during rollout**: (1) the per-device
+  tarballs were first built without `requirements.txt` — `pip install -r
+  requirements.txt` failed with a plain missing-file error, caught
+  immediately from the SSM command's stderr. (2) `pip install torch`
+  (default PyPI wheel, CUDA-bundled) failed with `OSError: [Errno 28] No
+  space left on device` even though the root volume had 6GB free — `/tmp`
+  on these AL2023 boxes is a small RAM-backed tmpfs (955MB on a
+  `t3.small`), and pip's download temp dir lives there by default. Fixed
+  by pointing `TMPDIR` at real disk (`/opt/fedgrid/tmp`) and installing
+  the CPU-only wheel (`--index-url https://download.pytorch.org/whl/cpu`)
+  instead of the default CUDA build — this project never touches a GPU
+  anyway, and the CPU wheel is a fraction of the size.
+- **Delivery mechanism**: `run_edge_node.py` runs as a systemd service
+  (`fedgrid-agent.service`, `enabled` so it survives reboot,
+  `Restart=on-failure`), installed via `AWS-RunShellScript` through SSM
+  Run Command (no SSH exists on these boxes by design, §5) —
+  `sudo systemctl status fedgrid-agent` / `sudo journalctl -u
+  fedgrid-agent` / `tail -f /var/log/fedgrid-agent.log` to check any
+  device from here forward. `REAL_BLOCK=0` (simulated firewall blocks,
+  logged not applied) is the current default on all 4 — flip to `1` in
+  `/opt/fedgrid/agent.env` + restart the service only if a demo
+  specifically wants to show a real `iptables` rule land.
+- **Verified working end-to-end against the real deployed API, not just
+  "the install script exited 0"**: all 4 systemd services report
+  `active`/`enabled`; device2's `SYNC_DOWNLOAD` action succeeded (would
+  have raised on a bad/missing API key, since `fetch_global_adapter`
+  calls `raise_for_status()`); confirmed by directly scanning
+  `fedgrid-IncidentsTable-U5B4NPHIN3B` — **13 real incidents** landed in
+  DynamoDB from live agent decisions within the first ~90 seconds of all
+  4 running, proving the full EC2 → API Gateway → Lambda → DynamoDB path
+  works for real, not just in `local_simulation.py`'s moto mock.
+- **Cost discipline reminder (§5 still applies)**: all 4 instances were
+  started for this deployment and are still running as of 2026-09-14 —
+  **stop them (`aws ec2 stop-instances`) once done with this session's
+  work**, the systemd service + SSM parameters + S3 bundles all persist
+  across a stop/start cycle so nothing needs re-deploying next time,
+  just `aws ec2 start-instances` on the same 4 ids from §11g.
+
+## 12. LoRA base-never-trained bug — found, fixed, everything re-measured (2026-09-14)
+
+**The bug**: `TabularTransformer.__init__` wraps the FFN sublayers
+(`linear1`/`linear2`) in `LoRALinear` immediately at construction, and
+`LoRALinear.__init__` freezes the wrapped base weight unconditionally,
+right then — before any training loop ever runs. This meant
+`model/train_backbone.py`'s "central pretraining" never touched the FFN's
+base weight matrix at all, at any point in the project's history: it sat
+at PyTorch's random initialization for the model's entire lifetime,
+including in every checkpoint ever trained and the one live on all 4 EC2
+nodes before this fix. Verified directly (not assumed):
+`layer.linear1.base.weight.requires_grad` was `False` the instant a fresh
+`TabularTransformer` was constructed, before `.to(device)` or any
+optimizer existed. Only `cont_proj`, `cat_embeds`, `self_attn`
+(un-wrapped attention projections), the FFN's `lora_A`/`lora_B`, and
+`head` ever received gradients, at any stage, ever. Every number in
+§4/§7/§11* was measured against this backbone.
+
+**Why this matters, precisely**: LoRA's premise (Hu et al. 2021) is a
+cheap trainable correction on top of an already-pretrained weight. Doing
+that to a matrix that was never pretrained at all is closer to a fixed
+random-feature projection wearing a trained low-rank correction —
+different from what the citation and the "frozen pretrained backbone"
+framing throughout this doc claimed. The measured accuracy numbers were
+still real (the model does work), but the *description* of why it works
+was wrong, and would not have survived a reviewer reading the code.
+
+**The fix** (`model/lora_adapter.py`, `model/tabular_transformer.py`,
+`model/train_backbone.py`): central pretraining now explicitly unfreezes
+the FFN base (`unfreeze_ffn_base_for_pretraining()`) so it trains jointly
+with the LoRA delta on the real objective. After training,
+`merge_and_reset_adapters()` folds the learned delta into the base
+(`base.weight += scale * lora_B @ lora_A`) and resets `lora_A`/`lora_B`
+to zero-effect, THEN `freeze_backbone()` runs — the textbook
+LoRA-after-pretrain workflow: adapt a real trained weight starting from a
+zero delta, not a permanently-random one. Verified mechanically before
+retraining: in eval mode, model output is bit-exact identical
+(max diff 0.0) immediately before vs. after the merge — proves the merge
+is a pure algebraic reparameterization, not a behavior change, and that
+training the base pre-merge actually moved it (confirmed by diffing
+`base.weight` before/after a few optimizer steps in isolation).
+
+**Backbone retrained** (same 10 epochs, `central_pretrain_pool.csv`,
+Fuzzers still excluded): 97.44% central validation accuracy (was 97.6% —
+essentially unchanged, consistent with the FFN base's contribution being
+secondary to attention/cont_proj/head, which were already training
+correctly all along).
+
+**Fuzzers still a valid hold-out choice, re-confirmed, not assumed**: the
+"before" zero-shot state is still clearly bad (43.32% official-test
+recall, up from the buggy backbone's 36.44% but still far below general
+recall ~88-89% — a real generalization gap remains, just a somewhat
+smaller one). Not the "already near-perfect, no room to show recovery"
+failure mode that rejected Backdoor in §4. No re-partitioning needed.
+
+**Corrected Table 1/2 — general metrics, frozen global model, genuinely
+held-out test sets** (supersedes §11b's tables):
+
+| Metric | UNSW-NB15 (82,332 rows) | ToN_IoT (31,656 rows) |
+|---|---|---|
+| Accuracy | 87.53% | 98.95% |
+| Precision (Normal) | 86.23% | 97.39% |
+| Precision (Attack) | 88.58% | 99.44% |
+| Recall (Normal) | 85.98% | 98.19% |
+| Recall (Attack) | 88.79% | 99.18% |
+| Macro F1 | 0.8739 | 0.9855 |
+| False Positive Rate | 14.02% | 1.81% |
+| Fuzzers recall (official test, 6,062 rows) | 43.32% | — |
+
+Payload size unchanged (14.27 KB — LoRA rank/params identical). Latency
+re-measured 0.72ms median / 1.07ms p95 (comfortably under 50ms target,
+consistent with before within measurement noise).
+
+**Corrected Table 3 — federated Fuzzers recovery, 4 seeds (123/456/789/2024),
+mean ± std, `cloud/multiround_fuzzers_experiment.py` now takes the seed as
+a CLI arg** (`python -m cloud.multiround_fuzzers_experiment <seed>`) —
+supersedes §11f/its seed-456 addendum entirely, those numbers are the
+buggy backbone:
+
+| Round | Cum. Fuzzers | Official-test recall | Replay-set acc | General acc | General FPR |
+|---|---|---|---|---|---|
+| 0 (before) | 0% | 43.32% | 29.79% | 87.53% | 14.02% |
+| 4 (after, mean±std) | 100% | **63.37% ± 3.20pt** | **53.76% ± 3.57pt** | 85.37% ± 0.45pt | 23.91% ± 1.76pt |
+
+Net: **+20.05pt ± 3.20pt** (official test), **+23.98pt ± 3.57pt** (replay
+set) — this is the number to cite in the paper, with the ± std, since you
+now actually have it across 4 independent seeds rather than resting on
+one run. Per-seed round-4 values: official recall
+[0.6176, 0.6744, 0.6008, 0.6420], replay acc
+[0.5181, 0.5828, 0.5016, 0.5481] (seeds in the same order: 123/456/789/2024).
+
+**Bonus finding from the fix**: the dramatic round-2 general-accuracy
+collapse seen with the buggy backbone (§11f: 87.32%→63.89%→85.66%
+recovery) **does not appear at all** with the fixed backbone across any
+of the 4 seeds (round-to-round accuracy stays within ~1-2pt of round 1
+throughout). Consistent with the theory that a real trained FFN gives
+much better-conditioned representations than a permanently-random one,
+making LoRA-only local updates far less prone to compounding drift. Worth
+a sentence in the paper: fixing this bug incidentally also fixed an
+instability that had been flagged as an open question.
+
+**`model/validate_holdout.py` now reports an unusable, over-optimistic
+number (100% after Device 1's solo retrain) — do NOT cite this script's
+output.** It trains on an artificially clean, isolated Fuzzers-only slice
+with zero benign examples mixed in (same known limitation flagged in
+§11b for the pre-fix backbone) and evaluates a single un-federated
+device — with the now-real FFN representations, this combination
+overfits to a suspiciously perfect number, exactly the failure mode
+§11e's discipline warns about. Table 3 above (the genuine multi-device
+federated result) is the one that survived that scrutiny and is what
+should be cited.
+
+**Redeployed to all 4 EC2 nodes — done 2026-09-14** (same S3+SSM mechanism
+as the original deploy, §11g): all 4 `fedgrid-agent` services stopped,
+refreshed with the corrected `backbone_frozen.pt` (md5
+`2758b9de9274ddeb477ef2dd8aade152`), restarted, confirmed `active`. The
+live demo now matches every number in this section.
+
+**Centralized non-federated baseline — built and run** (`model/
+train_baseline_centralized.py`, doesn't deploy anywhere, exists only as a
+reference point). Trains the SAME architecture, full parameters (no LoRA
+restriction, same `unfreeze_ffn_base_for_pretraining()` fix applied), on
+the raw union of `device{1..4}_train.csv` — Fuzzers included, since a
+real non-privacy-preserving system has no reason to hide it. Evaluated on
+the identical two held-out test sets as Table 1:
+
+| Metric | Federated system (Table 1) | Centralized baseline |
+|---|---|---|
+| UNSW-NB15 accuracy | **87.53%** | 81.11% |
+| UNSW-NB15 macro F1 | **0.8739** | 0.7964 |
+| UNSW-NB15 FPR | **14.02%** | 39.66% |
+| Fuzzers recall (UNSW) | 63.37% (after federated recovery) | **93.32%** (trained on it directly, no zero-day framing) |
+| ToN_IoT accuracy | 98.95% | 98.98% (~tied) |
+| ToN_IoT FPR | **1.81%** | 3.15% |
+
+**Real, surprising, unresolved finding**: the federated system beats the
+naive centralized baseline on general accuracy and FPR (both datasets),
+despite the centralized model training on strictly more pooled raw data
+with no privacy constraint. Checked and ruled out class-balance skew as
+the explanation (pooled device union: 71.8% attack-labeled;
+`central_pretrain_pool.csv`: 70.7% — nearly identical). Most likely
+explanation, **not confirmed, worth investigating further before final
+submission**: the raw non-IID Dirichlet-split device partitions carry
+distributional quirks (feature co-occurrence patterns, not just label
+balance) that the more curated `central_pretrain_pool.csv` doesn't. Don't
+oversell this as "federation strictly improves accuracy" without digging
+into why — but it's a legitimate, honestly-obtained result and a strong
+paper finding either way: federation-with-LoRA here doesn't cost general
+detection quality for the privacy benefit, only some zero-day recall
+speed (which federated rounds recover progressively, per Table 3).
 
 ## 11. Decisions log
 
