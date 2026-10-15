@@ -125,6 +125,7 @@ class EdgeAgent:
                 self.device_id, new_adapter, n_samples=self.trainer.last_batch_size,
                 local_val_accuracy=self.trainer.last_val_accuracy,
             )
+            self.actuator.log_incident(self.device_id, decision)
 
         elif decision.action == Action.SYNC_DOWNLOAD:
             self._last_sync_check = time.time()
@@ -159,7 +160,14 @@ class EdgeAgent:
         })
 
     def run_step(self, flow_record):
+        """Returns (decision, pred_class, confidence) -- the caller (only
+        run_edge_node.py today) needs the raw perception too, separate from
+        the Decision the agent acted on, to detect a live-demo "miss": a
+        known hold-out-attack replay row where the agent's own decision
+        wasn't BLOCK/ALERT. That check belongs in the demo harness, not
+        here -- the agent itself never sees ground-truth labels, only the
+        harness (which controls the replay CSV) does."""
         pred_class, confidence = self.perceive(flow_record)
         decision = self.decide(pred_class, confidence, flow_record)
         self.act(decision, flow_record)
-        return decision
+        return decision, pred_class, confidence

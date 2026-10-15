@@ -14,7 +14,7 @@ import torch
 
 from edge_agent.inference import InferenceModel, SchemaEncoder
 from edge_agent.trainer import LocalTrainer
-from model.tabular_transformer import TabularTransformer
+from model.tabular_transformer import TabularTransformer, wrap_with_lora
 
 CHECKPOINT_PATH = "model/backbone_frozen.pt"
 VOCAB_PATH = "data/processed/vocab.json"
@@ -30,7 +30,7 @@ def load_model():
         n_continuous=ckpt["n_continuous"], cat_cardinalities=ckpt["cat_cardinalities"]
     )
     model.load_state_dict(ckpt["model_state_dict"])
-    return model
+    return wrap_with_lora(model)
 
 
 def evaluate_on_replay(inference_model, encoder, replay_df):

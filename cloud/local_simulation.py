@@ -54,7 +54,7 @@ from moto import mock_aws  # noqa: E402
 from edge_agent.comms import _flatten_state, _unflatten_state  # noqa: E402
 from edge_agent.inference import InferenceModel, SchemaEncoder  # noqa: E402
 from edge_agent.trainer import LocalTrainer  # noqa: E402
-from model.tabular_transformer import TabularTransformer  # noqa: E402
+from model.tabular_transformer import TabularTransformer, wrap_with_lora  # noqa: E402
 
 DEVICE_IDS = ["device1", "device2", "device3", "device4"]
 
@@ -132,6 +132,7 @@ def main():
                 cat_cardinalities=[len(encoder.vocab[c]) for c in ["proto", "service", "state"]],
             )
             model.load_state_dict(backbone.state_dict())  # each starts identical, then diverges
+            model = wrap_with_lora(model)
             inf_model = InferenceModel(model, encoder)
             buffer = _load_device_buffer(did, encoder)
             trainer = LocalTrainer(buffer, epochs=5)

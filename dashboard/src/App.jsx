@@ -4,6 +4,7 @@ import { MOCK_ROUNDS, MOCK_INCIDENTS } from './mockData.js'
 import StatusHeader from './components/StatusHeader.jsx'
 import AccuracyChart from './components/AccuracyChart.jsx'
 import DeviceContributions from './components/DeviceContributions.jsx'
+import LiveAssessment from './components/LiveAssessment.jsx'
 import IncidentFeed from './components/IncidentFeed.jsx'
 
 const POLL_INTERVAL_MS = 5000
@@ -57,6 +58,7 @@ export default function App() {
         </div>
       )}
       <StatusHeader rounds={sortedRounds} connected={connected} />
+      <LiveAssessment incidents={displayIncidents} connected={connected} />
       <div className="grid">
         <AccuracyChart rounds={sortedRounds} />
         <DeviceContributions rounds={sortedRounds} />

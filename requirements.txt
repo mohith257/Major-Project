@@ -8,3 +8,9 @@ boto3
 # dev-only: needed to run cloud/local_simulation.py (mocks DynamoDB/S3
 # locally, never touches real AWS or ships to edge devices/Lambda)
 moto[dynamodb,s3]
+
+# only needed to run run_edge_node.py with LIVE_CAPTURE=1
+# (edge_agent/live_capture.py) -- raw packet capture, not needed for the
+# CSV-replay path or anywhere in cloud/. Windows also needs Npcap
+# (https://npcap.com) installed separately; run as Administrator/root.
+scapy

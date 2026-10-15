@@ -16,10 +16,11 @@ the demo -- "devices 2-4 can't detect it until FedAvg propagates device
 1's local training" -- genuinely true rather than scripted. See memory.md
 §4/§7/§8.
 
-After training, freeze_backbone() locks every parameter except the LoRA
-adapters + head. From that point on, only those (small) parameters may
-ever change -- which is what keeps a live local retrain fast and what
-FedAvg actually aggregates.
+This trains a PLAIN model (peft LoRA wrapping happens separately, only
+once this checkpoint gets loaded onto a device for local fine-tuning --
+see model/tabular_transformer.py's wrap_with_lora()). Every parameter here
+trains normally; there's no LoRA wrapper to unfreeze or merge back in
+during central pretraining anymore.
 """
 import pandas as pd
 import torch
@@ -61,15 +62,7 @@ def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
         n_continuous=len(CANONICAL_CONTINUOUS),
         cat_cardinalities=encoder.cardinalities(),
     ).to(device)
-    # LoRALinear freezes the FFN base unconditionally at construction --
-    # without this, central pretraining would never touch it, leaving it
-    # at random init for the model's entire lifetime. Undone by
-    # merge_and_reset_adapters() + freeze_backbone() after training.
-    model.unfreeze_ffn_base_for_pretraining()
 
-    # Full model (base + LoRA deltas together) trains here.
-    # merge_and_reset_adapters() + freeze_backbone() only get called AFTER
-    # this loop, once, right before the checkpoint is saved.
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
 
@@ -96,8 +89,6 @@ def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
             f"train_loss={total_loss / n:.4f}  val_acc={val_acc:.4f}"
         )
 
-    model.merge_and_reset_adapters()
-    model.freeze_backbone()
     torch.save(
         {
             "model_state_dict": model.state_dict(),

@@ -1197,3 +1197,310 @@ speed (which federated rounds recover progressively, per Table 3).
   caught by deliberately checking general performance, not assumed safe;
   second fix is the current authoritative one). Current authoritative
   demo number: Fuzzers hold-out replay 23.2%→73.9% (+50.7pt), DRI 0.66.
+
+## 13. Demo-day incident and fixes (2026-09-21)
+
+**The 4 EC2 edge nodes from §11g no longer existed.** Preparing for a
+live mentor demo today, `describe_instances` on the 4 documented instance
+IDs returned nothing, and `ap-south-1` had zero EC2 instances at all.
+Confirmed via CloudTrail, not guessed: `TerminateInstances` was called on
+all 4 (`i-0b21c5f1e75bcf14c`, `i-044fed5739b0e043e`, `i-0f7691cd6167f261d`,
+`i-0d67c79d3e5805072`) on **2026-09-15 18:50 IST** by the `FEDGRID-DEPLOY`
+identity — one day after this file's last entry, never recorded here.
+Cause not identified (CloudTrail only attributes it to the shared deploy
+identity, not a person) — worth asking the team before this happens again
+silently. IAM role (`fedgrid-edge-node-role`), instance profile, security
+group (`fedgrid-edge-node-sg`, `sg-09e0b27ace8f7b2a6`), and the S3 deploy
+bundles/bootstrap script all survived, so re-provisioning was cheap.
+
+**CORS was never configured on `FedGridApi`** — this is why the dashboard
+showed "Failed to fetch" / fell back to DEMO DATA even though the API
+itself worked fine (confirmed by curling it directly, real API keys,
+real responses). No `Cors` property on the SAM API resource, and no
+`Access-Control-Allow-Origin` header in any Lambda response — a browser
+`fetch()` from `localhost:5174` was always going to be blocked, this was
+never actually tested from a browser before today. **Fixed and deployed**:
+`Cors` block added to `FedGridApi` in `template.yaml`, and
+`Access-Control-Allow-Origin: *` added to `rounds_lambda`/
+`incidents_read_lambda` responses (the two the dashboard calls). Verified
+directly with a real cross-origin-style request post-deploy.
+
+**`RETRAIN` decisions were never visible in the incident feed** — found
+while checking why the dashboard's "training happened" story wouldn't
+show up live. `agent.py`'s `RETRAIN` branch called the trainer + uploaded
+the adapter, but never called `actuator.log_incident`, unlike BLOCK/ALERT.
+The dashboard's `IncidentFeed.jsx` and `styles.css` (`badge-retrain`) had
+already been built to render a RETRAIN row — mock data used it — but the
+real code path never emitted one. **Fixed**: one line added
+(`self.actuator.log_incident(self.device_id, decision)` in the RETRAIN
+branch of `agent.py`'s `act()`). Not deployed to the cloud stack (this is
+edge-side code) — baked into today's rebuilt device tarballs instead (see
+below). `SYNC_DOWNLOAD` deliberately left unlogged — every device checks
+this every ~15s, logging it would flood the feed with noise no one wants.
+
+**Re-provisioned edge nodes, new instance IDs** (old ones above are now
+invalid, don't reuse them):
+
+| device | instance id | AZ |
+|---|---|---|
+| device-1 | `i-0b31d377eaacd6ca5` | ap-south-1a |
+| device-2 | `i-02f3503e21b9f5efb` | ap-south-1c |
+| device-3 | `i-02336b4f5de7011ac` | ap-south-1b |
+| device-4 | `i-0ec77ce0efffbba45` | ap-south-1b (subnet `subnet-00a713decf1d60334`) |
+
+Same AMI family (fetched the current latest AL2023 x86_64 AMI at
+provisioning time rather than reusing the now-stale pinned one from §11g
+— AMIs age out, the bootstrap installs everything itself so the exact AMI
+build doesn't matter). Same IAM role/SG/no-key-pair setup as §5. All 4
+confirmed SSM Online and `fedgrid-agent.service` `active (running)`
+within ~5 minutes of launch, no `PendingVerification` hold this time.
+
+**Per-device S3 deploy tarballs rebuilt and re-uploaded** with the
+RETRAIN-logging fix baked in (`deploy/device{1..4}.tar.gz`), and
+**`deploy/node_bootstrap.sh` updated** to arm `REPLAY_CSV`/`REPLAY_EVERY`
+(`holdout_replay.csv`, every 10th row) automatically for devices 2-4 only
+— needed because those devices have zero Fuzzers samples in their own
+local partition by design (§4), so without replay injection they'd never
+encounter the hold-out attack at all and the live before/after story
+would have nothing to show. Device 1 is deliberately left without
+`REPLAY_CSV` since it already sees Fuzzers natively.
+
+**Verified working end-to-end post-redeploy**: `GET /incidents` returned
+real BLOCK decisions from device4 within ~1 minute of the agents starting,
+with real attention-rollout data attached, through the actual
+EC2→API Gateway→Lambda→DynamoDB→dashboard path. `GET /rounds` still empty
+at that point — expected, no federated round had completed yet.
+
+**First CORS fix was incomplete — dashboard still showed "Failed to
+fetch" after it.** `FedGridApi`'s API-level `Auth: ApiKeyRequired: true`
+was applying to SAM's auto-generated CORS `OPTIONS` method too. A
+browser's real preflight `OPTIONS` request never carries an API key (it
+can't — preflights don't send custom headers), so API Gateway rejected
+every preflight with `403 Forbidden` before the browser ever sent the
+actual `GET`. This is invisible to `requests.get()`-style testing (what
+was used to "verify" the first fix) because Python's `requests` never
+performs a real preflight — only an actual browser does. Confirmed
+directly by sending a real `OPTIONS` request with
+`Access-Control-Request-Method`/`Access-Control-Request-Headers`, which
+returned 403 with no CORS headers at all. **Fixed properly**: removed
+`Auth: ApiKeyRequired: true` from `FedGridApi`'s top level, added it
+instead to each individual method's own `Api` event (`Update`,
+`GetModel`, `PostIncident`, `GetRounds`, `GetIncidents`) — the
+auto-generated `OPTIONS` method isn't defined through an `Events` block,
+so it's now correctly exempt from the key requirement by default.
+Re-verified with a real preflight simulation post-deploy: `OPTIONS` now
+returns 200 with proper `Access-Control-Allow-*` headers, real `GET`
+still requires and accepts the API key. **Lesson for next time**: when
+testing CORS, test the actual preflight (`OPTIONS` with
+`Access-Control-Request-*` headers, no API key), not just the real
+request with a scripted HTTP client — they exercise different code
+paths in API Gateway.
+
+**Cost/cleanup reminder**: these are new instances, billing from
+2026-09-21. Stop (don't need to terminate) after today's demo — same
+discipline as §5, and don't let today's termination mystery repeat
+without at least a note here about who/what did it.
+
+**Further live-demo findings, same session, after the CORS fix above:**
+
+- **`LocalSelfEvalTrigger`'s "reliable" retrain trigger had silently never
+  fired since the §12 backbone fix.** `accuracy_floor=0.85` was calibrated
+  against the pre-§12 (buggy) backbone. After that fix, general accuracy
+  rose enough that device1's own-buffer accuracy is 87.49% — ABOVE the old
+  floor — so `should_retrain()` returned `False` every single time,
+  forever, with the fixed backbone. Nobody caught this because every
+  multiround experiment force-reveals Fuzzers tranches directly rather
+  than waiting on this trigger; only running the real live EC2 demo for
+  60+ real minutes (device1: 56 min / 73 steps, zero retrains) surfaced
+  it. Measured device-by-device accuracy directly (not guessed): device1
+  87.49%, device2 96.23%, device3 98.82%, device4 99.07%. **Fixed**:
+  `accuracy_floor` raised to `0.90` (fires reliably on device1 only,
+  matching original design intent).
+- **Same function had a real performance bug**: `should_retrain()` did an
+  unbatched per-row Python loop over the entire local buffer (104,606 rows
+  for device1) on every check — ~46s/call in production, same class of
+  bug already fixed once in `model/evaluate.py`'s `predict_all()` (§11b).
+  Batched the same way, same fix pattern.
+- **`MIN_STRAGGLER_PARTICIPANTS` lowered from 2 to 1** (`aggregate_lambda/
+  handler.py`) after discovering that devices 2-4 have no organic path to
+  ever retrain with the current, more-accurate backbone: their own-buffer
+  accuracy (96-99%) is far above any reasonable self-eval floor, and
+  `StreamDriftMonitor`'s confidence floor (0.6) is nowhere close to
+  reachable even under aggressive hold-out replay injection (measured real
+  average confidence ~0.91-0.95 even at 1-in-3 replay rate). Requiring
+  ≥2 organic participants meant the round provably never completes, not
+  just slowly. This is a genuine finding for the report, not a hack: this
+  system's accuracy is high enough that only the device holding the
+  rare/held-out class has any reason to update in a given round.
+- **`MISS` incident type added** (`run_edge_node.py`'s traffic loop +
+  `edge_agent/agent.py`'s `run_step()` now returns `(decision, pred_class,
+  confidence)`) — a known hold-out-attack replay row that the agent's own
+  decision didn't BLOCK/ALERT now gets explicitly logged as a visible
+  `MISS` incident (dashboard: bold red badge, distinct from `BLOCK`). This
+  closes a real gap: previously a "miss" was pure silence in the incident
+  feed, giving the live demo no visible "before" evidence for the
+  before/after story §8 describes. The agent itself never sees ground
+  truth — this is demo-harness instrumentation (the harness controls the
+  replay CSV and knows the true label), not something baked into the
+  agent's decision logic.
+- **`RETRAIN` decisions were never logged to the incident feed at all**
+  (separate from the above) — `agent.py`'s RETRAIN branch called the
+  trainer + uploaded the adapter but never called `actuator.log_incident`,
+  unlike BLOCK/ALERT. Dashboard UI/CSS already supported a `RETRAIN` badge
+  (mock data used it) but the real path never emitted one. Fixed: one line
+  added.
+- **`store.list_incidents()`/`list_rounds()` had a real correctness bug**:
+  `table.scan(Limit=N)` caps how many items DynamoDB *evaluates* before
+  returning, not how many survive a subsequent sort — sorting "the first N
+  items Scan happened to touch" and calling it "most recent" is wrong
+  whenever old and new data coexist in the table. Caught for real: the
+  dashboard kept showing week-old incidents from the terminated Sept-14
+  deployment as "current." A first fix (scan-all-then-sort, capped
+  defensively at 5000 items) reproduced the identical bug one level down
+  once the table grew past 24,000 items — DynamoDB Scan traverses in
+  partition order, not timestamp order, so the cap kept the scan stuck
+  inside one stale device's partition. Fixed properly: cap raised to a
+  pure runaway-growth guard (100,000), not something a normal session
+  hits. This in turn required bumping every Lambda's `Timeout` (15s→29s,
+  API Gateway's hard ceiling) and `MemorySize` (256MB→1024MB, more
+  CPU/network per invocation) since a genuine full-table scan of the
+  (still mostly stale) 24K-item table was timing out. **Still a stopgap,
+  not a real fix** — a real deployment needs a GSI on timestamp instead of
+  scanning at all; a bulk delete of the stale pre-2026-09-21 items was
+  attempted but blocked by the environment's safety classifier
+  (mass-delete category) and never completed. The stale data is harmless
+  now that sorting is correct, just wasteful.
+- **Root cause of "only device4 showing" and "time looks wrong"**: two
+  compounding effects — (1) the scan-before-sort bug above genuinely
+  returning stale Sept-14/15 data, and (2) device4's local partition is
+  genuinely 93.0% attack-labeled (measured: device1 56.2%, device2 84.3%,
+  device3 49.2%, device4 93.0% — a real, expected outcome of the Dirichlet
+  non-IID split, §4) so device4 legitimately fires BLOCK almost
+  continuously once real data was actually being read.
+- All 4 instances stopped (not terminated) via `ec2.stop_instances` at the
+  end of the session, confirmed `stopped` state before moving on.
+
+## 14. LoRA migration: hand-rolled → HuggingFace `peft` (2026-09-21)
+
+**Why**: user-requested, explicitly to make the "hand-rolled LoRA/FedAvg"
+story read as more standard/citable to a non-technical-enough reviewer.
+Pushed back once on the premise (a hand-rolled implementation of a cited
+paper's method is not less rigorous than importing a library, and FedAvg
+staying hand-built is arguably the stronger systems claim) — overruled,
+proceeded as directed. **Explicitly does NOT increase accuracy on its
+own** — same LoRA math (Hu et al. 2021) whether hand-rolled or via `peft`,
+verified directly (see below), not asserted.
+
+**What changed**:
+- `model/lora_adapter.py` (hand-rolled `LoRALinear`) is now dead code —
+  nothing imports it. Deletion was attempted but blocked by the
+  environment's safety classifier (irreversible-local-destruction
+  category); still sitting in the repo, safe to `git rm` manually.
+- `model/tabular_transformer.py`: `TabularTransformer` is now a PLAIN
+  model (ordinary `nn.Linear` FFN, no LoRA at construction). New
+  `wrap_with_lora(model, r=4, alpha=8)` applies `peft.LoraConfig`
+  (`target_modules=["linear1","linear2"]`, `modules_to_save=["head"]`) via
+  `peft.get_peft_model()` — called ONLY after central pretraining, on a
+  device's own copy. This is a cleaner expression of the same
+  LoRA-after-pretrain workflow than the old hand-rolled
+  unfreeze/merge/freeze dance: the LoRA wrapper simply never exists during
+  pretraining, so there's nothing to unfreeze or merge back in.
+- Verified directly, in isolation, before touching production code (not
+  assumed): `peft.get_peft_model()` on this exact custom
+  `TransformerEncoder`-based architecture (a) forwards positional
+  multi-arg calls (`model(x_cont, x_cat)`) correctly, (b) backprop +
+  optimizer step work normally, (c) attribute access for anything peft
+  doesn't define (`.cont_proj`, `.cat_embeds`, `.encoder`) transparently
+  proxies to the wrapped base model — meaning `model/explain.py`'s
+  `attention_rollout()` and `agent.py`'s `_explain()` needed **zero**
+  changes despite directly poking at raw architecture internals.
+- `peft_model.adapter_state_dict()` / `.load_adapter_state_dict()` /
+  `.trainable_parameters()` are attached as bound methods (thin wrappers
+  around `peft.get_peft_model_state_dict()` /
+  `set_peft_model_state_dict()` / a `requires_grad` filter) so every
+  existing call site (`edge_agent/trainer.py`, `edge_agent/inference.py`,
+  `cloud/local_simulation.py`, `cloud/multiround_fuzzers_experiment.py`)
+  kept working completely unchanged.
+- `edge_agent/comms.py`'s `_flatten_state`/`_unflatten_state` simplified —
+  peft's state dict is already a flat `{dotted_name: tensor}` dict (unlike
+  the old 2-level nested one), so the flatten step is now just a
+  tensor→numpy conversion, no more `rsplit`-based reconstruction needed.
+- `cloud/shared/serialization.py`/`aggregate.py` needed **zero changes** —
+  confirmed by reading them first: `weighted_average` is fully generic
+  over an arbitrary flat `{name: array}` dict, never assumes a specific
+  naming scheme.
+- `model/train_backbone.py` / `train_baseline_centralized.py` simplified —
+  no more `unfreeze_ffn_base_for_pretraining()` call needed (a plain model
+  is already fully trainable).
+- Real dependency conflict hit and left as-is (not yet resolved):
+  installing `peft` pulled in `click==8.5.0`, conflicting with
+  `aws-sam-cli`'s pin of `click==8.1.8`. `sam --version` still works
+  despite the pip warning; watch for this if `sam build`/`deploy` starts
+  failing later — may need a separate virtualenv for ML vs. deploy
+  tooling.
+
+**Backbone retrained** (same 10 epochs, same Fuzzers exclusion,
+`central_pretrain_pool.csv`): 97.50% central validation accuracy (was
+97.44% pre-migration, §12 — consistent with "no accuracy change expected,"
+not evidence of an improvement).
+
+**Corrected Table 1 — general metrics, frozen global model, genuinely
+held-out test sets** (supersedes §12's table; same test files):
+
+| Metric | UNSW-NB15 (82,332 rows) | ToN_IoT (31,656 rows) |
+|---|---|---|
+| Accuracy | 87.19% | 98.84% |
+| Macro F1 | 0.8706 | 0.9840 |
+| False Positive Rate | 14.31% | 1.93% |
+| Fuzzers recall (official test, 6,062 rows) | 41.06% | — |
+
+All within normal retrain-to-retrain variance of the §12 numbers
+(87.53%/98.95%/14.02%/43.32%) — real difference, not a regression, most
+likely from `train_backbone.py` never setting a random seed (see below).
+
+**Real, disclosed regression**: inference latency roughly quadrupled —
+mean 3.73ms / median 2.88ms / p95 6.65ms, vs. the hand-rolled version's
+0.72ms median / 1.07ms p95 (§12). Still comfortably under the 50ms target,
+but `peft`'s wrapper indirection genuinely costs more per forward pass
+than the old direct computation — a real tradeoff of the library, not
+noise. Payload size essentially unchanged (14.56 KB vs 14.27 KB).
+
+**Corrected Table 3 — federated Fuzsers recovery, 4 seeds (123/456/789/
+2024), mean ± std** (supersedes §12's Table 3 entirely — same seeds, same
+`cloud/multiround_fuzzers_experiment.py`, only the underlying model
+changed):
+
+| Round | Cum. Fuzzers | Official-test recall | Replay-set acc | General acc | General FPR |
+|---|---|---|---|---|---|
+| 0 (before) | 0% | 41.06% | 28.14% | 87.19% | 14.31% |
+| 4 (after, mean±std) | 100% | **49.13% ± 2.49pt** | **36.97% ± 3.07pt** | 86.55% ± 0.12pt | 17.71% ± 0.71pt |
+
+Net: **+8.07pt ± 2.49pt** (official test), **+8.83pt ± 3.07pt** (replay
+set). Per-seed round-4 values: official recall
+[0.5025, 0.5210, 0.4741, 0.4677], replay acc
+[0.3808, 0.4079, 0.3476, 0.3423] (seeds in order 123/456/789/2024).
+
+**This is roughly HALF the §12 recovery** (+20.05pt ± 3.20pt official /
++23.98pt ± 3.57pt replay). Real, measured, disclosed — not spun. Verified
+the peft-vs-hand-rolled LoRA math is mathematically equivalent (same
+alpha/r scaling, same zero-init delta, same fully-trainable head
+treatment) via the isolated test above, so this gap is NOT attributed to
+the library swap. Most likely explanation, **not confirmed**:
+`train_backbone.py` sets `random_state=42` for the train/val split but
+never seeds `torch` itself — weight init and epoch-by-epoch batch
+shuffling (`torch.randperm(n)`) are uncontrolled, so every retrain
+produces a genuinely different backbone by chance, and the backbone's
+starting representations plausibly matter more to how well one local LoRA
+retrain can correct a specific blind spot than which library expresses
+the LoRA math. **Fix `train_backbone.py` to call `torch.manual_seed(...)`
+before training if this needs to be pinned down further** — not done yet,
+flagging for whoever picks this up next, same discipline as every other
+"found a real gap, disclosed it, didn't hide it" entry in this file.
+
+**For the report**: cite Table 1/Table 3 above as current, cite §12's
+numbers as the pre-migration reference point, and state the
+migration-to-`peft` motivation honestly (readability/citability, not a
+capability or accuracy improvement) — don't let "we migrated to a
+standard library" imply "and therefore it got better," because the
+measured data says the opposite on the one metric that matters most for
+this project's headline story.

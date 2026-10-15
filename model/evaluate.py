@@ -43,7 +43,7 @@ from data.scripts.partition_data import (
 )
 from edge_agent.comms import _flatten_state
 from edge_agent.inference import InferenceModel, SchemaEncoder
-from model.tabular_transformer import TabularTransformer
+from model.tabular_transformer import TabularTransformer, wrap_with_lora
 
 CHECKPOINT_PATH = "model/backbone_frozen.pt"
 VOCAB_PATH = "data/processed/vocab.json"
@@ -53,12 +53,17 @@ TON_IOT_TEST_PATH = "data/processed/ton_iot_test.csv"
 
 
 def load_model():
+    """Wraps with peft's LoRA (wrap_with_lora) before returning -- matches
+    what a real edge device actually runs (run_edge_node.py's
+    build_model()), which matters here since measure_payload_size() needs
+    a real adapter_state_dict() to measure, and it keeps this evaluation
+    honest about testing the same code path as production."""
     ckpt = torch.load(CHECKPOINT_PATH, weights_only=False)
     model = TabularTransformer(
         n_continuous=ckpt["n_continuous"], cat_cardinalities=ckpt["cat_cardinalities"]
     )
     model.load_state_dict(ckpt["model_state_dict"])
-    return model
+    return wrap_with_lora(model)
 
 
 def predict_all(inference_model, df, batch_size=4096):

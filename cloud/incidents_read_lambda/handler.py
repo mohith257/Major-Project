@@ -16,4 +16,8 @@ def handler(event, context):
     params = event.get("queryStringParameters") or {}
     limit = int(params.get("limit", 100))
     incidents = store.list_incidents(limit=limit)
-    return {"statusCode": 200, "body": json.dumps({"incidents": incidents})}
+    return {
+        "statusCode": 200,
+        "headers": {"Access-Control-Allow-Origin": "*"},
+        "body": json.dumps({"incidents": incidents}),
+    }

@@ -67,11 +67,9 @@ def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
         cat_cardinalities=encoder.cardinalities(),
     ).to(device)
     # Full model, no LoRA restriction -- this is the whole point of the
-    # baseline, so every parameter (including the FFN base LoRALinear
-    # would otherwise freeze) trains together, same fix as
-    # train_backbone.py's unfreeze_ffn_base_for_pretraining().
-    model.unfreeze_ffn_base_for_pretraining()
-
+    # baseline (2026-09-21: moot now that LoRA wrapping happens via
+    # peft.wrap_with_lora() only after pretraining, not at construction --
+    # this model is already fully trainable by default).
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
 

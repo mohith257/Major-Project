@@ -32,7 +32,10 @@ export default function IncidentFeed({ incidents }) {
               <tr
                 key={i}
                 className={
-                  inc.action === 'BLOCK' ? 'row-block' : inc.action === 'ALERT' ? 'row-alert' : ''
+                  inc.action === 'BLOCK' ? 'row-block'
+                    : inc.action === 'ALERT' ? 'row-alert'
+                    : inc.action === 'MISS' ? 'row-miss'
+                    : ''
                 }
               >
                 <td>{formatTime(inc.timestamp)}</td>

@@ -10,8 +10,9 @@ Weights are sent as base64-encoded raw float arrays in a plain JSON body
 (cloud/shared/serialization.py), NOT torch.save/pickle -- the Lambda side
 never has PyTorch installed (see that module's docstring), so the wire
 format has to be torch-free even though this side has full torch
-available. This module is the only place that converts between
-TabularTransformer's nested tensor state dicts and that flat wire format.
+available. This module is the only place that converts between the
+peft-wrapped model's flat adapter state dict (torch tensors) and that
+same-shaped flat wire format (numpy arrays, base64-encoded).
 """
 import logging
 
@@ -24,27 +25,19 @@ from cloud.shared.serialization import decode_state, encode_state
 logger = logging.getLogger("comms")
 
 
-def _flatten_state(nested: dict) -> dict:
-    """TabularTransformer.adapter_state_dict() returns a 2-level nested
-    dict of tensors (outer key e.g. 'layer0.linear1', inner key e.g.
-    'lora_A'). Flattened to dotted names + numpy arrays for the wire
-    format. Uses rsplit on unflatten so an outer key that itself contains
-    a dot (like 'layer0.linear1') doesn't get mis-split."""
-    flat = {}
-    for outer_key, inner in nested.items():
-        for inner_key, tensor in inner.items():
-            flat[f"{outer_key}.{inner_key}"] = tensor.detach().cpu().numpy()
-    return flat
+def _flatten_state(state: dict) -> dict:
+    """model.adapter_state_dict() (peft.get_peft_model_state_dict() under
+    the hood, since 2026-09-21) already returns a flat {dotted_name:
+    tensor} dict -- just convert tensors to numpy for the wire format.
+    Kept as its own function (rather than inlined) since upload_adapter/
+    fetch_global_adapter call it symmetrically with _unflatten_state, and
+    to keep this module's one job -- bridging torch tensors and the
+    cloud's torch-free wire format -- explicit."""
+    return {name: tensor.detach().cpu().numpy() for name, tensor in state.items()}
 
 
 def _unflatten_state(flat: dict) -> dict:
-    nested = {}
-    for dotted_key, arr in flat.items():
-        outer_key, inner_key = dotted_key.rsplit(".", 1)
-        nested.setdefault(outer_key, {})[inner_key] = torch.from_numpy(
-            np.asarray(arr).copy()
-        )
-    return nested
+    return {name: torch.from_numpy(np.asarray(arr).copy()) for name, arr in flat.items()}
 
 
 class CloudComms:

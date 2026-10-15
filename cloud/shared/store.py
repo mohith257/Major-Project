@@ -168,24 +168,46 @@ def complete_round(round_number: int, participants: list, avg_val_accuracy: floa
     }))
 
 
+def _scan_all(table, cap=100000):
+    """DynamoDB Scan's Limit caps how many items it EVALUATES, not how many
+    survive a subsequent sort -- table.scan(Limit=N) then sorting just
+    those N is wrong for "most recent N" and was caught for real
+    (2026-09-21): with old and new data both in the table, it was
+    returning an arbitrary early-scanned segment (stale week-old items)
+    instead of the actual most recent ones. A first fix capped this
+    helper's own full-table scan at 5000 items as a defensive limit -- but
+    Scan traverses in partition order, not timestamp order, so with 24k+
+    items dominated by one stale device's partition, THAT cap reproduced
+    the exact same bug one level down (stopped scanning while still stuck
+    in old data, never reaching today's rows). `cap` is now high enough to
+    be a pure runaway-growth guard, not something a normal demo session
+    will ever hit -- a real deployment would use a GSI on timestamp
+    instead of scanning at all."""
+    items = []
+    resp = table.scan()
+    items.extend(resp.get("Items", []))
+    while "LastEvaluatedKey" in resp and len(items) < cap:
+        resp = table.scan(ExclusiveStartKey=resp["LastEvaluatedKey"])
+        items.extend(resp.get("Items", []))
+    return _to_native(items)
+
+
 def list_rounds(limit: int = 50):
     """Most recent completed rounds first -- what the dashboard's accuracy
     chart and per-round contribution view are built from."""
     table = _dynamodb.Table(ROUNDS_TABLE)
-    resp = table.scan(Limit=limit)
-    items = _to_native(resp.get("Items", []))
-    return sorted(items, key=lambda r: r["round"], reverse=True)
+    items = _scan_all(table)
+    items.sort(key=lambda r: r["round"], reverse=True)
+    return items[:limit]
 
 
 def list_incidents(limit: int = 100):
     """Most recent incidents first, across all devices -- the dashboard's
-    live incident feed. A full table scan is fine at this scale (a demo
-    with 4 devices over a handful of rounds); a real deployment would
-    query a GSI on timestamp instead."""
+    live incident feed."""
     table = _dynamodb.Table(INCIDENTS_TABLE)
-    resp = table.scan(Limit=limit)
-    items = _to_native(resp.get("Items", []))
-    return sorted(items, key=lambda i: i.get("timestamp", 0), reverse=True)
+    items = _scan_all(table)
+    items.sort(key=lambda i: i.get("timestamp", 0), reverse=True)
+    return items[:limit]
 
 
 def put_update_weights(round_number: int, device_id: str, submission: dict):

@@ -13,8 +13,14 @@ Description: >
 Globals:
   Function:
     Runtime: python3.12
-    Timeout: 15
-    MemorySize: 256
+    # 29s = API Gateway's hard integration-timeout ceiling, bumped from 15s
+    # (2026-09-21) because IncidentsTable/RoundsTable full-table scans
+    # started exceeding 15s once real demo traffic accumulated. Stopgap,
+    # not a real fix -- a growing table will eventually outrun even this;
+    # the actual fix is a GSI on timestamp (see store.py's _scan_all) or
+    # purging stale data, not a bigger timeout.
+    Timeout: 29
+    MemorySize: 1024
     Environment:
       Variables:
         ROUND_STATE_TABLE: !Ref RoundStateTable
@@ -27,12 +33,21 @@ Globals:
         ROUND_TIMEOUT_SECONDS: "30"
 
 Resources:
+  # NOTE: ApiKeyRequired is set per-method (on each function's Api event
+  # below), not here as an API-level default. Setting it here would also
+  # apply to the Cors block's auto-generated OPTIONS method -- and a
+  # browser's CORS preflight OPTIONS request never carries an API key, so
+  # API Gateway would reject the preflight with 403 before the browser
+  # ever sends the real GET (found 2026-09-21: this is why the dashboard
+  # kept showing "Failed to fetch" even after Cors/headers were added).
   FedGridApi:
     Type: AWS::Serverless::Api
     Properties:
       StageName: demo
-      Auth:
-        ApiKeyRequired: true
+      Cors:
+        AllowOrigin: "'*'"
+        AllowHeaders: "'Content-Type,X-Api-Key'"
+        AllowMethods: "'GET,OPTIONS'"
 
   WeightsBucket:
     Type: AWS::S3::Bucket
@@ -114,6 +129,8 @@ Resources:
             RestApiId: !Ref FedGridApi
             Path: /update
             Method: post
+            Auth:
+              ApiKeyRequired: true
 
   ModelFunction:
     Type: AWS::Serverless::Function
@@ -132,6 +149,8 @@ Resources:
             RestApiId: !Ref FedGridApi
             Path: /model
             Method: get
+            Auth:
+              ApiKeyRequired: true
 
   IncidentFunction:
     Type: AWS::Serverless::Function
@@ -148,6 +167,8 @@ Resources:
             RestApiId: !Ref FedGridApi
             Path: /incidents
             Method: post
+            Auth:
+              ApiKeyRequired: true
 
   RoundsFunction:
     Type: AWS::Serverless::Function
@@ -164,6 +185,8 @@ Resources:
             RestApiId: !Ref FedGridApi
             Path: /rounds
             Method: get
+            Auth:
+              ApiKeyRequired: true
 
   IncidentsReadFunction:
     Type: AWS::Serverless::Function
@@ -180,6 +203,8 @@ Resources:
             RestApiId: !Ref FedGridApi
             Path: /incidents
             Method: get
+            Auth:
+              ApiKeyRequired: true
 
   StragglerFunction:
     Type: AWS::Serverless::Function
