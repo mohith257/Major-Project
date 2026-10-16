@@ -1,0 +1,91 @@
+\section{Related Work}
+
+\subsection{Machine-Learning Intrusion Detection}
+Machine-learning IDS are commonly evaluated on public benchmarks such as
+CICIDS2017, UNSW-NB15~\cite{moustafa2015unsw} and ToN\_IoT~\cite{ton_iot}.
+Pandit et al.~\cite{pandit2023} compare classical classifiers and ensemble
+learning on CICIDS2017. Bayesh and Hossain~\cite{bayesh2024} combine a
+Gaussian mixture model, which flags previously unseen anomalies, with
+supervised models that identify known attack types. Both approaches train
+centrally on pooled data and report results at a fixed decision threshold.
+Benchmark results are also often obtained on random splits of a single file,
+which are easier than the official train/test separation; we show the size
+of this gap on UNSW-NB15 in Section~V.
+
+\subsection{Federated Intrusion Detection}
+Federated learning~\cite{mcmahan2017} trains a shared model while each client
+keeps its data. Lim et al.~\cite{lim2020} survey FL at the network edge and
+identify communication cost, resource allocation, and privacy and security as
+its main implementation challenges. Lameh et al.~\cite{lameh2020} study FL on
+edge devices empirically and show how accuracy and cost depend on the number
+of clients and rounds. For intrusion detection, FLUIDS~\cite{aouedi2022fluids}
+combines federated learning with a semi-supervised design: an autoencoder
+learns from unlabelled traffic and a supervised component from the labelled
+part. Mothukuri et al.~\cite{mothukuri2022} train recurrent (GRU) detectors
+for IoT attacks in federated rounds, so raw device data stays local.
+Ruzafa-Alc\'{a}zar et al.~\cite{ruzafa2023} evaluate differential privacy in
+a federated IDS for the industrial IoT on non-IID ToN\_IoT data and compare
+FedAvg with Fed+. Devi et al.~\cite{devi2025fatvit} convert traffic records
+into two-dimensional images, classify them with a lightweight Vision
+Transformer, and combine federated adaptive training with contrastive
+adversarial training. Vyas et al.~\cite{iot_survey} survey privacy-preserving
+federated IDS for IoT, covering homomorphic encryption, differential privacy
+and secure multiparty computation. These systems federate the full model in
+every round and report accuracy at the default threshold. Non-IID data,
+where clients see different attack classes, is known to slow and destabilise
+FedAvg; FedProx~\cite{li2020fedprox} adds a proximal term to the local
+objective to limit client drift.
+
+\subsection{Communication-Efficient and Robust Federation}
+LoRA~\cite{hu2022lora} freezes a pretrained network and trains low-rank
+updates of selected weight matrices. In FL this shrinks each upload to a
+small fraction of the model. It is widely used for language models but has
+rarely been applied to network-flow intrusion detection. Federation also
+opens an attack surface. A malicious client can scale its update so that it
+replaces the global model~\cite{bagdasaryan2020}. Robust aggregators such as
+the coordinate-wise median~\cite{yin2018} bound the influence of any single
+client, and Lyu et al.~\cite{lyu2022} survey the resulting space of poisoning
+attacks and defences. Most federated IDS work does not evaluate either
+defence, nor what an individual site should do if the server itself
+distributes a poisoned model.
+
+\subsection{Agentic and Automated Response}
+Panwar and Abdelrahman~\cite{panwar2025agentic} review agentic AI in
+cybersecurity. Such systems perceive, decide, act and adapt rather than only
+label. The review identifies autonomous response, adaptation to new threats
+and the explainability of black-box models as open problems. Hammar and
+Stadler~\cite{hammar2022} formulate intrusion prevention as an optimal
+multiple-stopping problem, show that optimal defender policies have a
+threshold structure, and learn them with reinforcement learning on a digital
+twin of a 31-server infrastructure. Attention-based
+attribution~\cite{abnar2020} is one practical route to explaining
+Transformer decisions. In federated IDS, however, response is usually
+treated separately from detection: the cost of a wrong block, its
+reversibility, and the effect of human feedback on later decisions are
+seldom measured.
+
+\subsection{Research Gap}
+Table~\ref{tab:related} summarises the surveyed work.
+% TODO: confirm with an IEEE Xplore / Google Scholar search before submission.
+To our knowledge, no prior work combines parameter-efficient federation of a
+network-flow IDS with an edge agent that acts on, reverses and learns from
+its own verdicts. We also found no federated IDS evaluation that tests
+whether a recall gain reflects better class separation or only a shifted
+decision threshold. Agentic FedGrid addresses both gaps.
+
+\begin{table*}[t]\centering
+\caption{Comparison with surveyed work.}
+\label{tab:related}
+\resizebox{\textwidth}{!}{\begin{tabular}{lllcccc}\toprule
+Work & Method & Data & Federated & Param.-efficient & Response/agent & Threshold-free eval. \\ \midrule
+Pandit et al.~\cite{pandit2023} & ML ensembles & CICIDS2017 & -- & -- & -- & -- \\
+Bayesh \& Hossain~\cite{bayesh2024} & GMM + supervised & CICIDS2017 & -- & -- & -- & -- \\
+Lameh et al.~\cite{lameh2020} & FL on edge devices & non-IDS & \checkmark & -- & -- & -- \\
+Aouedi et al.~\cite{aouedi2022fluids} & Semi-supervised FL & IDS benchmark & \checkmark & -- & -- & -- \\
+Mothukuri et al.~\cite{mothukuri2022} & Federated GRU & IoT traffic & \checkmark & -- & -- & -- \\
+Ruzafa-Alc\'{a}zar et al.~\cite{ruzafa2023} & FL + differential privacy & ToN\_IoT & \checkmark & -- & -- & -- \\
+Devi et al.~\cite{devi2025fatvit} & Federated ViT + adv. training & IDS benchmark & \checkmark & -- & -- & -- \\
+Hammar \& Stadler~\cite{hammar2022} & RL intrusion prevention & Digital twin & -- & -- & \checkmark & -- \\
+Panwar \& Abdelrahman~\cite{panwar2025agentic} & Review (agentic AI) & -- & -- & -- & discussed & -- \\
+\textbf{Agentic FedGrid} & LoRA-federated Transformer + agent & UNSW-NB15, ToN\_IoT & \checkmark & \checkmark & \checkmark & \checkmark \\
+\bottomrule\end{tabular}}\end{table*}

@@ -1,0 +1,15 @@
+### JOB v2 2 ip-172-31-23-69.ap-south-1.compute.internal Thu Oct 15 18:28:23 UTC 2026
+train rc=0
+epoch 30/30  train_loss=0.0570  val_acc=0.9786
+saved frozen backbone -> model/backbone_frozen.pt (best val_acc=0.9788)
+eval rc=0
+RESULT_EVAL {"backbone_seed": 2, "r": {"unsw": {"accuracy": 0.8790263809940242, "precision_normal": 0.8592496147101025, "precision_attack": 0.895677658955658, "recall_normal": 0.8739729729729729, "recall_attack": 0.8831509750286773, "macro_f1": 0.8779594839343823, "false_positive_rate": 0.12602702702702703, "confusion_matrix": {"tn": 32337, "fp": 4663, "fn": 5297, "tp": 40035}}, "fuzzers_recall": 0.3632464533157374, "ton_iot": {"accuracy": 0.9927028051554208, "precision_normal": 0.9854414318151462, "precision_attack": 0.9949522115106127, "recall_normal": 0.9837333333333333, "recall_attack": 0.9954876635204504, "macro_f1": 0.9899032536251198, "false_positive_rate": 0.016266666666666665, "confusion_matrix": {"tn": 7378, "fp": 122, "fn": 109, "tp": 24047}}, "latency": {"mean_ms": 1.715641619903181, "median_ms": 1.6732474996388191, "p95_ms": 1.7716343969368609, "n_samples": 200}, "payload": {"adapter_json_bytes": 15026, "adapter_json_kb": 14.67}}}
+multi rc=0
+MULTIV2 789 === PROGRESSION SUMMARY (global model, measured on device2) ===
+MULTIV2 789 round  cum%  off.fuzzers  replay.fuzzers  gen.acc  gen.fpr
+MULTIV2 789     0    0%       0.3632          0.2341   0.8790   0.1260
+MULTIV2 789     1   25%       0.3710          0.2484   0.8925   0.0961
+MULTIV2 789     2   50%       0.4358          0.3195   0.8794   0.1484
+MULTIV2 789     3   75%       0.4477          0.3309   0.8723   0.1692
+MULTIV2 789     4  100%       0.4751          0.3615   0.8722   0.1759
+### ALLDONE Thu Oct 15 19:08:50 UTC 2026

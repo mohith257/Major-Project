@@ -1,0 +1,252 @@
+% =====================================================================
+% Agentic FedGrid -- Abstract, Contributions, Results, Conclusion.
+% Every number below is from the EC2 runs in paper_figures/aws_logs/
+% (parsed by build_results.py into results_tables.tex / results_final.json).
+% Tables referenced: tab:backbone, tab:refs, tab:fed_rounds_v1, tab:fed_rounds_v2,
+% tab:operating, tab:threshold, tab:ablation, tab:policy_ton, tab:policy_unsw,
+% tab:agent_ton, tab:agent_unsw, tab:analyst.
+% Figures: fig1_infrastructure.png, fig2_rounds.png, fig3_ablation_bars.png,
+% fig4_agent_bars.png.
+% =====================================================================
+
+\begin{abstract}
+Network intrusion detection at the edge must adapt to attacks that only some
+sites have seen, without moving raw traffic off the device and without letting
+one bad update or one false alarm disrupt legitimate hosts. We present
+Agentic FedGrid, a deployed system in which autonomous agents on edge nodes
+detect, respond to, and learn from network flows. A frozen tabular Transformer
+is adapted with low-rank (LoRA) adapters federated through a serverless AWS
+control plane (10.3\,KB per upload vs.\ 103.7\,KB for the full model). The
+agent chooses actions by expected cost, escalates blocks gradually with
+automatic expiry, learns from analyst rollbacks, shares and retracts threat
+intelligence with its peers, and adopts a new global model only if it does
+not degrade its own held-out performance. All experiments ran on four EC2
+nodes with multiple seeds.
+
+Our evaluation is deliberately threshold-free where it matters. Four
+federated rounds raise recall on an attack class withheld from pretraining
+(Fuzzers) from 41.1\% to 54.5\% at the default threshold, but the
+false-positive rate rises from 14.3\% to 19.2\%. Moving only the decision
+threshold of the frozen backbone to the same FPR yields 53.4\%, and the
+Fuzzers-vs-benign AUROC does not improve (0.823 vs.\ 0.818). The apparent
+gain is an operating-point shift, a pitfall we expect to affect other
+federated IDS evaluations. Spreading the class over three clients or running
+5$\times$ more local steps does not change this: recall and FPR rise together
+(up to 87.2\% at 37.4\% FPR), the Fuzzers AUROC stays at 0.817--0.820, and the
+frozen model with a moved threshold matches or beats every variant.
+Full-model federation degrades the ranking (AUROC 0.962 to 0.950), while LoRA
+at the default local budget preserves it (0.959). The robustness
+results hold: under a model-replacement attack FedAvg collapses to 47.5\%
+accuracy, whereas coordinate-wise median aggregation holds 86.5\% and the
+adoption gate rejects every poisoned model. At the decision layer, the full
+agent cuts benign traffic dropped by blocking from 49.8\% to 12.5\% (ToN\_IoT)
+and from 22.1\% to 2.1\% (UNSW-NB15) while letting fewer attacks through. With
+an imperfect analyst (10\% wrong verdicts) mistaken rollbacks let attacks
+through; shortening the learned exception from 30 to 5 minutes cuts that
+leakage by about two-thirds. The backbone reaches 87.7\% accuracy on the official
+UNSW-NB15 test set (gradient-boosted trees: 90.1\%), 99.3\% on ToN\_IoT, and
+1.7\,ms inference on the edge node.
+\end{abstract}
+
+\section*{Contributions}
+\begin{enumerate}
+\item A deployed edge--cloud architecture that federates LoRA adapters of a
+tabular Transformer IDS through serverless AWS services (API Gateway, Lambda,
+DynamoDB, S3), with straggler handling and lock-based round coordination. Raw
+flows never leave the device. The live backend closed 12{,}610 rounds over
+25 days.
+\item An edge agent whose actions go beyond classification: cost-aware action
+selection, graded and self-expiring blocks, analyst-feedback rollback with
+learned exceptions, peer threat-intel sharing with retraction, and verified
+adoption of global models. It is evaluated against both an ideal and an
+imperfect analyst.
+\item A threshold-free evaluation of federated adaptation showing that, in
+this setting, the recall gain on an unseen class is fully explained by a
+shift of the operating point, including when the class is spread over three
+clients or local training is 5$\times$ longer. This is a reporting pitfall for
+federated IDS work that uses default-threshold recall.
+\item A multi-seed evaluation on real cloud hardware: LoRA rank vs.\
+full-model federation, FedAvg vs.\ FedProx vs.\ median aggregation,
+hard-example mining, adversarial training, model poisoning, and the agent's
+decision layer. Gradient-boosted and centralized references are included.
+\end{enumerate}
+
+\section{Results}
+
+\subsection{Backbone and reference models}
+Table~\ref{tab:backbone} reports the frozen backbone before any federation.
+Moving from one token for all continuous features (v1) to one token per
+feature with a longer one-cycle schedule (v2) raises UNSW-NB15 accuracy from
+87.19\% to 87.73$\pm$0.35\%, lowers its FPR from 14.31\% to
+12.94$\pm$1.13\%, and lifts ToN\_IoT to 99.28$\pm$0.04\% (FPR 1.64\%).
+Inference stays at 1.7\,ms per flow on a t3.small. The better general fit
+comes with lower recall on the withheld Fuzzers class before federation
+(36.81\% vs.\ 41.06\%), so v2 is not uniformly better.
+
+Table~\ref{tab:refs} places the backbone between two references trained on
+the same eight features. Gradient-boosted trees trained on the same
+pretraining pool reach 90.10$\pm$0.17\% accuracy at 8.9\% FPR, so the
+Transformer itself costs about 2.4 points on this split. We keep it because
+LoRA federation, FGSM training and attention attribution all require a
+differentiable model, and the tree's advantage does not extend to the unseen
+class (34.3\% Fuzzers recall vs.\ 41.1\%). The backbone scores 97.9\% on a
+random split of its own pretraining pool. The roughly 10-point drop to the
+official test file is distribution shift between the official training and
+test files, not a lack of fit. A Transformer trained
+centrally on all device data, Fuzzers included, reaches 89.8\% Fuzzers recall
+but only 82.4\% accuracy at 36.4\% FPR (3 seeds).
+
+\subsection{Federated adaptation to an unseen attack class}
+Fuzzers flows are excluded from pretraining and appear only on device~1,
+revealed 25/50/75/100\% over four rounds. All metrics are measured on the
+global model on device~2, which never sees a Fuzzers flow.
+
+\textbf{At the default threshold} (Table~\ref{tab:fed_rounds_v1},
+Fig.~\ref{fig:rounds}), Fuzzers recall rises from 41.06\% to
+54.50$\pm$1.92\% (backbone v1, 4 seeds) and replay-set accuracy from 28.14\% to
+43.53\%. Accuracy moves only from 87.19\% to 86.46\%, but the FPR rises from
+14.31\% to 19.21\%. Backbone v2 gives 36.81\%~$\rightarrow$~47.39$\pm$9.83\%
+at 17.01\% FPR (Table~\ref{tab:fed_rounds_v2}).
+
+\textbf{Threshold-free} (Tables~\ref{tab:operating},~\ref{tab:threshold}), the
+picture changes. Across rounds, AUROC stays at 0.962~$\rightarrow$~0.959, the
+Fuzzers-vs-benign AUROC at 0.823~$\rightarrow$~0.818, and Fuzzers recall at a
+fixed 10\% FPR falls from 38.0\% to 34.8\%. Moving only the frozen backbone's
+threshold to the FPR each federated variant ends at gives the same recall:
+53.4\% vs.\ 54.5\% at 19.2\% FPR, 51.6\% vs.\ 50.5\% at 18.3\%, and 57.0\% vs.\
+59.1\% at 21.2\%. Federation in this setting therefore moves the operating
+point toward ``attack''; it does not teach the model to separate Fuzzers from
+benign traffic. The information is not absent. The centrally trained model
+reaches 0.847 Fuzzers AUROC and 48.1\% recall at 10\% FPR (one seed).
+
+\textbf{More clients and longer local training.} Two obvious explanations
+are that only one of four clients holds the class and that each round runs
+only 100 local steps. We tested both on the same Fuzzers flows: split into
+disjoint shards over two or three clients, with 5$\times$ more local steps
+(500 per round), and both combined (Tables~\ref{tab:ablation},~\ref{tab:operating},~\ref{tab:threshold};
+3 seeds each). Default-threshold recall rises to 51.1\% (two clients),
+71.4\% (5$\times$ steps), 79.4\% (three clients) and 87.2\% (both), but the
+FPR rises with it, to 18.5\%, 28.2\%, 33.6\% and 37.4\%. The Fuzzers-vs-benign
+AUROC stays at 0.817--0.820 in every variant (0.823 before federation), and
+recall at 10\% FPR stays at 33.8--36.1\% (38.0\% before). The frozen backbone
+with only its threshold moved to the same FPR matches or beats each variant:
+51.9\% vs.\ 51.1\%, 71.7\% vs.\ 71.4\%, 85.1\% vs.\ 79.4\%, and 89.7\% vs.\
+87.2\%. Longer local training also costs robustness (FGSM accuracy 74.5\%
+$\rightarrow$ 53.9\%), and with three clients and 5$\times$ steps two of three
+seeds collapse (UNSW accuracy 59.8\% and 59.6\%, AUROC 0.77 and 0.75).
+Participation and local budget are therefore not the bottleneck in the regimes
+we tested. Together with the full-model result below, which removes the
+capacity limit and degrades the ranking further, this suggests that the
+binary local objective itself moves the decision boundary rather than the
+representation. We regard default-threshold recall as an unreliable measure
+of federated gains and report both.
+
+\subsection{Ablations}
+Table~\ref{tab:ablation} and Fig.~\ref{fig:ablation} vary one component at a
+time. Unless stated otherwise, each variant uses backbone v1, LoRA $r{=}4$ and
+FedAvg, with 3 seeds.
+
+\textbf{Rank and full-model federation.} Ranks 1, 2 and 4 behave almost
+identically: Fuzzers recall 50.5--52.4\%, FPR $\approx$18.3\%, at 2.8--10.3\,KB
+per upload. Rank 8 (20.3\,KB) reaches 59.1\% at 21.2\% FPR. Full-model FedAvg
+sends 10$\times$ more data (103.7\,KB) and reaches 78.0\% recall at 33.1\% FPR.
+Threshold-free, the full model is worse: AUROC 0.950 vs.\ 0.959 for LoRA,
+30.2\% vs.\ 34.8\% Fuzzers recall at 10\% FPR, and 78.0\% vs.\ 84.0\% for the
+frozen backbone at the same 33.1\% FPR. Updating every weight from one
+site's skewed data degrades the shared ranking. The low-rank restriction
+limits this degradation, but it does not produce a gain either.
+
+\textbf{Local objective.} FedProx ($\mu{=}0.01$) gives no measurable gain over
+FedAvg: 52.4\% vs.\ 50.5\% recall and 19.0\% vs.\ 18.3\% FPR, both within
+one standard deviation. This is consistent with the already bounded local
+update, which limits client drift without a proximal term.
+
+\textbf{Training components.} Removing FGSM training leaves clean accuracy
+essentially unchanged (86.78\% vs.\ 86.47\%). Accuracy under an FGSM
+perturbation ($\epsilon{=}0.05$) falls from 74.49\% to 52.37\%. Removing
+hard-example mining does not change Fuzzers recall (52.97\%), but robustness
+becomes unstable across seeds (58.7$\pm$12.8\%). We report mining as having
+no clear benefit.
+
+\textbf{Poisoning.} One client uploads $-10\times$ its honest adapter
+(model replacement). Under FedAvg the global model collapses to near-chance
+accuracy (47.5$\pm$13.1\%), alternating between labelling everything benign
+and everything malicious. With the adoption gate, every device rejected every
+poisoned global model in all rounds and seeds. However, the isolated devices
+keep training only on their own skewed data, and device~2's FPR drifts to
+38.8\%. Coordinate-wise median aggregation removes the attack at the server:
+86.54$\pm$0.21\% accuracy and 18.46$\pm$2.20\% FPR, matching the clean runs.
+Median aggregation on clean data costs little (86.31\% accuracy, 20.1\% FPR;
+AUROC 0.959, identical to FedAvg). The two defences are complementary: the
+median protects the shared model, and the gate protects a device if the
+server is compromised.
+
+\subsection{The agentic decision layer}
+\textbf{Action selection} (Tables~\ref{tab:policy_unsw},~\ref{tab:policy_ton}).
+On UNSW-NB15, the cost-aware rule cuts missed attacks from 11.6\% to 2.4\% of
+attack flows and lowers the average cost per flow by 23\%. The price is that
+it alerts on 31.5\% of benign flows instead of 12.6\%, which means more
+analyst workload. On ToN\_IoT both rules are already near-perfect, and the
+cost rule halves missed attacks (0.92\%~$\rightarrow$~0.39\%).
+
+\textbf{Response and learning} (Tables~\ref{tab:agent_ton},~\ref{tab:agent_unsw};
+Fig.~\ref{fig:agent}). Blocking per source IP magnifies false positives: one
+wrong verdict on a busy benign host cuts off all of its later traffic. With
+permanent blocks (configuration A) this drops 49.8\% of benign ToN\_IoT flows
+and 22.1\% of benign UNSW-NB15 flows.
+\begin{itemize}
+\item Graded, self-expiring blocks (C) reduce this to 28.6\% and 1.4\%,
+without any analyst.
+\item Analyst rollback with learned exceptions (D) reduces it further, to 9.4\% and 1.2\%.
+\item Peer intelligence with retraction (E) costs a little benign traffic
+(12.5\% and 2.1\%) but stops more attacks. Attack flows that get through fall
+from 0.029\% to 0.019\% (ToN\_IoT) and from 0.38\% to 0.13\% (UNSW-NB15)
+relative to the threshold-and-block baseline.
+\end{itemize}
+With an oracle analyst, the full agent therefore dominates the baseline on
+both axes and both datasets.
+
+\textbf{Imperfect analyst} (Table~\ref{tab:analyst}). In the next experiment,
+the analyst reviews only a random half of the blocks and is wrong 10\% or
+20\% of the time. Benign traffic dropped stays well below the baseline
+(24.0\% vs.\ 49.8\% on ToN\_IoT, 4.1\% vs.\ 22.1\% on UNSW-NB15 at 10\% error).
+Attack leakage, however, grows sharply: 4.5\% of ToN\_IoT attack flows get
+through at 10\% error and 11.8\% at 20\% error, against 0.083\% for
+configuration C with no analyst at all. The cause is the learned exception. A
+single wrong rollback of an attacker grants it 30 minutes in which block
+verdicts are downgraded to alerts, and the retraction propagates to every
+peer. Shortening the exception to 5 minutes cuts the leakage by about
+two-thirds (4.5\%~$\rightarrow$~1.5\% on ToN\_IoT and 3.1\%~$\rightarrow$~1.1\%
+on UNSW-NB15 at 10\% error). It costs more benign blocking with an ideal
+analyst (12.5\%~$\rightarrow$~18.6\% on ToN\_IoT). Analyst feedback is only
+worth enabling where analyst verdicts are reliable. Otherwise graded blocks
+alone (C) are the safer configuration.
+
+\section{Conclusion}
+Agentic FedGrid shows that low-rank federated adaptation and an agent that
+reasons about the cost and trustworthiness of its own actions can be combined
+on commodity cloud hardware. The measurements support four conclusions:
+\begin{itemize}
+\item Default-threshold recall overstates federated adaptation. In our
+setting, the recall gain on an unseen class is matched by moving the frozen
+model's threshold, and the class separation (AUROC) does not improve. This
+held with the class spread over up to three clients and with 5$\times$ longer
+local training. Federated IDS results should be reported threshold-free.
+\item Low-rank adaptation does not add discrimination here, but at the default
+local budget it preserves the backbone's ranking where full-model federation
+degrades it. Median
+aggregation together with verified adoption neutralises model-replacement
+poisoning.
+\item The main obstacle in edge intrusion detection is false positives, and
+per-host blocking magnifies them. Graded, self-expiring response removes most
+of this cost without any human input.
+\item Human feedback helps only when it is reliable. Mistaken rollbacks are
+amplified by learned exceptions and shared retractions, so their duration
+must be short.
+\end{itemize}
+Future work: federated objectives that change the representation rather than
+the threshold, such as contrastive or multi-class local objectives (more
+clients holding the class and longer local training did not help here); real
+analyst feedback; and temporal (multi-flow)
+models that reduce the per-flow false positives behind most of the costs
+measured here.

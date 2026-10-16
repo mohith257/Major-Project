@@ -1,0 +1,87 @@
+\section{Introduction}
+
+\subsection{Background}
+Networks of connected devices at the edge, such as IoT gateways, branch
+offices and industrial controllers, now carry a growing share of traffic and
+an even faster-growing share of attacks~\cite{iot_survey}. Machine-learning
+intrusion detection systems (IDS) report high accuracy on benchmark datasets,
+using classical ensembles~\cite{pandit2023} or hybrid models that combine
+anomaly detection with supervised classification~\cite{bayesh2024}. These
+systems share one assumption: all traffic is collected at a central server
+for training. At the edge this assumption is costly. Raw flows reveal which
+hosts talk to which, and moving them off-site raises privacy and legal
+concerns, consumes bandwidth, and adds latency to every model update. Many
+sites cannot share raw traffic at all.
+
+\subsection{Motivation}
+Federated learning (FL)~\cite{mcmahan2017} addresses part of this problem:
+each site trains on its own data and shares only model updates. Federated IDS
+have been built with semi-supervised objectives~\cite{aouedi2022fluids} and
+with Transformer backbones~\cite{devi2025fatvit}. Four gaps remain. First,
+most federated IDS exchange the full model in every round, so communication
+grows with model size. Parameter-efficient methods such as LoRA~\cite{hu2022lora}
+reduce this, but they are rarely applied to network-flow detection. Second,
+attack classes are unevenly spread: an attack may be labelled at only one
+site, and it is unclear whether federation actually transfers that knowledge
+to the other sites. Third, a single malicious client can replace the global
+model, and every site that adopts it blindly inherits the damage. Fourth, most
+work stops at classification. A verdict is useful only once it becomes an
+action, and an IDS that blocks a host on a single false positive cuts off all
+of that host's later legitimate traffic. Agentic approaches to security,
+which plan, act and adapt rather than only label~\cite{panwar2025agentic},
+are mostly discussed separately from federated detection.
+
+A further, methodological gap concerns evaluation. Federated IDS gains are
+usually reported as accuracy or recall at the default decision threshold.
+A rise in recall that comes together with a rise in false positives may
+reflect only a shift of the operating point. Moving the threshold of the
+original model would produce the same rise without any federation. Without
+threshold-free metrics, the two cannot be told apart.
+
+\subsection{Problem Statement}
+We consider $K$ edge sites, each holding a private, non-IID set of labelled
+network flows, with one attack class labelled at only one site. The goal is
+to build a system that (i) adapts a shared detector without moving raw flows,
+(ii) keeps each model upload small, (iii) remains safe when a client is
+malicious, and (iv) turns each verdict into an action that stops attacks
+without disrupting legitimate hosts. We call the edge component
+\emph{agentic} in a specific, limited sense. It chooses among actions by
+expected cost, reverses its own blocks when they prove wrong, learns from
+analyst feedback, shares and retracts threat intelligence with its peers,
+and verifies a new global model before adopting it. It is therefore more than
+a classifier followed by a fixed rule. We also ask whether the federated
+detector genuinely learns to separate the new attack class, or only moves
+its decision threshold.
+
+\subsection{Contributions}
+This paper presents Agentic FedGrid and makes the following contributions:
+\begin{enumerate}
+\item \textbf{A deployed edge--cloud architecture.} It federates only the
+low-rank (LoRA) adapters of a frozen tabular Transformer through serverless
+AWS services (API Gateway, Lambda, DynamoDB, S3). Each upload is 10.3\,KB,
+compared with 103.7\,KB for the full model, and raw flows never leave the
+device. The live backend closed 12{,}610 federated rounds over 25 days,
+with straggler handling for partial participation.
+\item \textbf{An edge agent whose actions go beyond classification.} It
+provides cost-aware action selection, graded and self-expiring blocks,
+analyst rollback with learned exceptions, peer threat intelligence with
+retraction, and verified adoption of global models. We evaluate it with
+both an ideal and an imperfect analyst.
+\item \textbf{A threshold-free evaluation of federated adaptation.} For an
+attack class withheld from pretraining, the recall gain from federation is
+fully explained by a shift of the operating point. This holds even when the
+class is spread over three clients or when local training is five times
+longer. Default-threshold recall is therefore an unreliable measure of
+federated gains.
+\item \textbf{A multi-seed evaluation on real cloud hardware.} It covers
+LoRA rank versus full-model federation; FedAvg, FedProx and median
+aggregation; model poisoning; the local training components; and the agent's
+decision layer, together with gradient-boosted and centrally trained
+reference models.
+\end{enumerate}
+
+\subsection{Paper Organisation}
+Section~II reviews related work. Section~III describes the system model and
+methodology, and Section~IV the experimental setup. Section~V reports the
+results. Section~VI discusses limitations, and Section~VII concludes with
+directions for future work.

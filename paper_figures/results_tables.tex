@@ -1,0 +1,167 @@
+\begin{table}[t]\centering
+\caption{Frozen backbone before federation: official UNSW-NB15 test set (82{,}332 flows) and ToN\_IoT held-out split (31{,}656 flows). v1: one token for all continuous features, 10 epochs, single run. v2: one token per feature, 30 epochs, one-cycle LR, mean $\pm$ sd over 3 seeds. Trained and evaluated on EC2.}
+\label{tab:backbone}
+\begin{tabular}{lcc}\toprule
+Metric & v1 & v2 \\ \midrule
+UNSW accuracy (\%) & 87.19 & 87.73 $\pm$ 0.35 \\
+UNSW macro-F1 & 0.871 & 0.876 $\pm$ 0.004 \\
+UNSW FPR (\%) & 14.31 & 12.94 $\pm$ 1.13 \\
+Fuzzers recall (\%) & 41.06 & 36.81 $\pm$ 0.81 \\
+ToN\_IoT accuracy (\%) & 98.84 & 99.28 $\pm$ 0.04 \\
+ToN\_IoT FPR (\%) & 1.93 & 1.64 $\pm$ 0.11 \\
+Median latency (ms, t3.small) & 1.71 & 1.70 $\pm$ 0.02 \\
+\bottomrule\end{tabular}\end{table}
+
+\begin{table}[t]\centering
+\caption{Global model after each FedAvg round, backbone v1 (mean $\pm$ sd over 4 seeds; real Lambda handler code on EC2 t3.small with DynamoDB/S3 mocked).}
+\label{tab:fed_rounds_v1}
+\begin{tabular}{ccccc}\toprule
+Round & Fuzzers recall (\%) & Replay acc. (\%) & UNSW acc. (\%) & UNSW FPR (\%) \\ \midrule
+0 & 41.06 $\pm$ 0.00 & 28.14 $\pm$ 0.00 & 87.19 $\pm$ 0.00 & 14.31 $\pm$ 0.00 \\
+1 & 41.36 $\pm$ 0.87 & 28.39 $\pm$ 1.08 & 87.36 $\pm$ 0.25 & 14.05 $\pm$ 0.87 \\
+2 & 45.36 $\pm$ 0.76 & 32.57 $\pm$ 0.92 & 86.82 $\pm$ 0.04 & 16.44 $\pm$ 0.23 \\
+3 & 48.12 $\pm$ 2.13 & 35.90 $\pm$ 2.55 & 86.72 $\pm$ 0.08 & 17.20 $\pm$ 0.73 \\
+4 & 54.50 $\pm$ 1.92 & 43.53 $\pm$ 1.98 & 86.46 $\pm$ 0.07 & 19.21 $\pm$ 0.61 \\
+\bottomrule\end{tabular}\end{table}
+
+\begin{table}[t]\centering
+\caption{Global model after each FedAvg round, backbone v2 (mean $\pm$ sd over 3 seeds; real Lambda handler code on EC2 t3.small with DynamoDB/S3 mocked).}
+\label{tab:fed_rounds_v2}
+\begin{tabular}{ccccc}\toprule
+Round & Fuzzers recall (\%) & Replay acc. (\%) & UNSW acc. (\%) & UNSW FPR (\%) \\ \midrule
+0 & 36.81 $\pm$ 0.81 & 24.17 $\pm$ 1.02 & 87.73 $\pm$ 0.35 & 12.94 $\pm$ 1.13 \\
+1 & 37.83 $\pm$ 1.26 & 25.63 $\pm$ 1.24 & 88.02 $\pm$ 1.07 & 12.66 $\pm$ 2.72 \\
+2 & 41.80 $\pm$ 2.08 & 30.15 $\pm$ 2.54 & 87.53 $\pm$ 0.36 & 15.16 $\pm$ 0.48 \\
+3 & 44.22 $\pm$ 5.97 & 32.55 $\pm$ 7.03 & 87.25 $\pm$ 0.03 & 16.46 $\pm$ 1.97 \\
+4 & 47.39 $\pm$ 9.83 & 36.35 $\pm$ 11.74 & 87.30 $\pm$ 0.76 & 17.01 $\pm$ 4.69 \\
+\bottomrule\end{tabular}\end{table}
+
+\begin{table*}[t]\centering
+\caption{Ablations after 4 federated rounds, global model on device 2 (mean $\pm$ sd over 3 seeds; EC2). Payload = raw float32 bytes uploaded per device per round. Adv.\ acc.\ = accuracy under FGSM, $\epsilon{=}0.05$, 5{,}000 test flows.}
+\label{tab:ablation}
+\begin{tabular}{lrcccccc}\toprule
+Variant & Payload (B) & Fuzzers rec. (\%) & UNSW acc. (\%) & UNSW FPR (\%) & Macro-F1 & Adv. acc. (\%) & ToN acc. (\%) \\ \midrule
+LoRA $r{=}1$ & 2,835 & 51.25 $\pm$ 1.71 & 86.67 $\pm$ 0.13 & 18.26 $\pm$ 0.69 & 0.864 $\pm$ 0.001 & 73.82 $\pm$ 1.64 & 98.90 $\pm$ 0.04 \\
+LoRA $r{=}2$ & 5,403 & 52.42 $\pm$ 0.11 & 86.55 $\pm$ 0.14 & 18.66 $\pm$ 0.30 & 0.863 $\pm$ 0.001 & 73.50 $\pm$ 1.48 & 98.87 $\pm$ 0.01 \\
+LoRA $r{=}4$ (default) & 10,515 & 50.48 $\pm$ 3.16 & 86.47 $\pm$ 0.04 & 18.28 $\pm$ 0.83 & 0.862 $\pm$ 0.001 & 74.49 $\pm$ 0.15 & 98.19 $\pm$ 1.09 \\
+LoRA $r{=}8$ & 20,763 & 59.12 $\pm$ 6.45 & 86.00 $\pm$ 0.56 & 21.24 $\pm$ 2.66 & 0.857 $\pm$ 0.007 & 75.21 $\pm$ 1.07 & 97.72 $\pm$ 0.97 \\
+Full-model FedAvg & 106,155 & 78.04 $\pm$ 3.34 & 82.66 $\pm$ 0.40 & 33.08 $\pm$ 1.80 & 0.817 $\pm$ 0.005 & 59.13 $\pm$ 13.48 & 95.95 $\pm$ 2.51 \\
+w/o hard-example mining & 10,515 & 52.97 $\pm$ 2.58 & 86.62 $\pm$ 0.02 & 18.65 $\pm$ 0.70 & 0.864 $\pm$ 0.000 & 58.71 $\pm$ 12.80 & 98.81 $\pm$ 0.05 \\
+w/o FGSM training & 10,515 & 50.26 $\pm$ 0.15 & 86.78 $\pm$ 0.03 & 17.67 $\pm$ 0.12 & 0.866 $\pm$ 0.000 & 52.37 $\pm$ 0.37 & 99.11 $\pm$ 0.01 \\
+FedProx ($\mu{=}0.01$) & 10,515 & 52.42 $\pm$ 3.88 & 86.37 $\pm$ 0.10 & 18.98 $\pm$ 1.13 & 0.861 $\pm$ 0.001 & 74.56 $\pm$ 0.16 & 98.81 $\pm$ 0.01 \\
+Median aggregation & 10,515 & 56.84 $\pm$ 3.00 & 86.31 $\pm$ 0.15 & 20.14 $\pm$ 1.02 & 0.860 $\pm$ 0.002 & 75.01 $\pm$ 0.89 & 98.21 $\pm$ 1.05 \\
++ adoption gate & 10,515 & 48.88 $\pm$ 4.95 & 86.47 $\pm$ 0.12 & 17.83 $\pm$ 1.43 & 0.863 $\pm$ 0.002 & 74.58 $\pm$ 0.34 & 98.18 $\pm$ 1.08 \\
+Poisoned client, FedAvg & 10,515 & 76.20 $\pm$ 41.22 & 47.51 $\pm$ 13.08 & 81.25 $\pm$ 32.47 & 0.337 $\pm$ 0.031 & 44.79 $\pm$ 15.57 & 72.06 $\pm$ 7.36 \\
+Poisoned client, FedAvg + gate & 10,515 & 88.56 $\pm$ 3.51 & 81.32 $\pm$ 0.69 & 38.82 $\pm$ 2.34 & 0.799 $\pm$ 0.009 & 76.29 $\pm$ 1.14 & 89.56 $\pm$ 0.31 \\
+Poisoned client, median & 10,515 & 50.86 $\pm$ 6.05 & 86.54 $\pm$ 0.21 & 18.46 $\pm$ 2.20 & 0.863 $\pm$ 0.003 & 69.16 $\pm$ 13.43 & 98.67 $\pm$ 0.03 \\
+Fuzzers on 2 clients & 10,515 & 51.15 $\pm$ 6.93 & 86.46 $\pm$ 0.22 & 18.47 $\pm$ 2.19 & 0.862 $\pm$ 0.003 & 74.36 $\pm$ 0.52 & 98.22 $\pm$ 1.02 \\
+Fuzzers on 3 clients & 10,515 & 79.42 $\pm$ 1.40 & 82.72 $\pm$ 0.22 & 33.56 $\pm$ 0.83 & 0.818 $\pm$ 0.003 & 77.03 $\pm$ 0.27 & 98.78 $\pm$ 0.02 \\
+5$\times$ local steps & 10,515 & 71.41 $\pm$ 11.17 & 84.15 $\pm$ 1.92 & 28.24 $\pm$ 6.83 & 0.835 $\pm$ 0.022 & 53.93 $\pm$ 1.34 & 97.10 $\pm$ 0.08 \\
+3 clients + 5$\times$ steps & 10,515 & 87.19 $\pm$ 4.38 & 67.04 $\pm$ 12.69 & 37.36 $\pm$ 1.44 & 0.665 $\pm$ 0.119 & 54.24 $\pm$ 2.40 & 97.63 $\pm$ 1.09 \\
+\bottomrule\end{tabular}\end{table*}
+
+\begin{table}[t]\centering
+\caption{Per-flow decisions, ToN\_IoT (real IPs), default cost table (frozen model).}
+\label{tab:policy_ton}
+\begin{tabular}{lcccc}\toprule
+Policy & False block (\%) & Benign alert (\%) & Attack missed (\%) & Cost/flow \\ \midrule
+Threshold ($p\geq0.9$) & 1.24 $\pm$ 0.00 & 0.69 $\pm$ 0.00 & 0.92 $\pm$ 0.00 & 0.152 $\pm$ 0.000 \\
+Cost-aware (Bayes) & 1.28 $\pm$ 0.00 & 2.40 $\pm$ 0.00 & 0.39 $\pm$ 0.00 & 0.126 $\pm$ 0.000 \\
+\bottomrule\end{tabular}\end{table}
+
+\begin{table}[t]\centering
+\caption{Four-agent stream simulation, ToN\_IoT (real IPs) (3 seeds). Dropped = benign flows refused by an active block; unblocked = attack flows not blocked or dropped.}
+\label{tab:agent_ton}
+\begin{tabular}{lccc}\toprule
+Agent configuration & Benign dropped (\%) & Attack unblocked (\%) & Rollbacks \\ \midrule
+A: threshold rule, permanent block & 49.79 $\pm$ 7.13 & 0.029 $\pm$ 0.008 & 0 $\pm$ 0 \\
+B: cost-aware, permanent block & 51.07 $\pm$ 6.75 & 0.028 $\pm$ 0.006 & 0 $\pm$ 0 \\
+C: + graded blocks (TTL) & 28.63 $\pm$ 5.67 & 0.083 $\pm$ 0.021 & 0 $\pm$ 0 \\
+D: + analyst rollback \& exceptions & 9.40 $\pm$ 0.70 & 0.072 $\pm$ 0.013 & 34 $\pm$ 0 \\
+E: + peer intel w/ retraction (full) & 12.50 $\pm$ 1.91 & 0.019 $\pm$ 0.005 & 42 $\pm$ 4 \\
+\bottomrule\end{tabular}\end{table}
+
+\begin{table}[t]\centering
+\caption{Per-flow decisions, UNSW-NB15 (synthetic sessions), default cost table (frozen model).}
+\label{tab:policy_unsw}
+\begin{tabular}{lcccc}\toprule
+Policy & False block (\%) & Benign alert (\%) & Attack missed (\%) & Cost/flow \\ \midrule
+Threshold ($p\geq0.9$) & 1.69 $\pm$ 0.00 & 12.62 $\pm$ 0.00 & 11.59 $\pm$ 0.00 & 1.012 $\pm$ 0.000 \\
+Cost-aware (Bayes) & 2.31 $\pm$ 0.00 & 31.53 $\pm$ 0.00 & 2.36 $\pm$ 0.00 & 0.776 $\pm$ 0.000 \\
+\bottomrule\end{tabular}\end{table}
+
+\begin{table}[t]\centering
+\caption{Four-agent stream simulation, UNSW-NB15 (synthetic sessions) (3 seeds). Dropped = benign flows refused by an active block; unblocked = attack flows not blocked or dropped.}
+\label{tab:agent_unsw}
+\begin{tabular}{lccc}\toprule
+Agent configuration & Benign dropped (\%) & Attack unblocked (\%) & Rollbacks \\ \midrule
+A: threshold rule, permanent block & 22.05 $\pm$ 0.60 & 0.381 $\pm$ 0.044 & 0 $\pm$ 0 \\
+B: cost-aware, permanent block & 28.35 $\pm$ 0.62 & 0.285 $\pm$ 0.022 & 0 $\pm$ 0 \\
+C: + graded blocks (TTL) & 1.42 $\pm$ 0.06 & 1.267 $\pm$ 0.119 & 0 $\pm$ 0 \\
+D: + analyst rollback \& exceptions & 1.21 $\pm$ 0.02 & 1.113 $\pm$ 0.160 & 882 $\pm$ 8 \\
+E: + peer intel w/ retraction (full) & 2.14 $\pm$ 0.08 & 0.132 $\pm$ 0.032 & 1076 $\pm$ 26 \\
+\bottomrule\end{tabular}\end{table}
+
+\begin{table}[t]\centering
+\caption{Threshold-free view of federation (official UNSW-NB15 test set, 3 seeds; EC2). AUROC over all flows, Fuzzers-vs-benign AUROC, and Fuzzers recall at a fixed 10\% benign FPR (threshold set on the benign test flows), before (round 0) and after (round 4) federation.}
+\label{tab:operating}
+\begin{tabular}{llccc}\toprule
+Variant & Round & AUROC & Fuzzers AUROC & Fuzzers rec.\ @10\% FPR (\%) \\ \midrule
+LoRA $r{=}4$ (default) & 0 & 0.962 $\pm$ 0.000 & 0.823 $\pm$ 0.000 & 37.99 $\pm$ 0.00 \\
+ & 4 & 0.959 $\pm$ 0.001 & 0.818 $\pm$ 0.003 & 34.83 $\pm$ 1.40 \\
+LoRA $r{=}8$ & 0 & 0.962 $\pm$ 0.000 & 0.823 $\pm$ 0.000 & 37.99 $\pm$ 0.00 \\
+ & 4 & 0.958 $\pm$ 0.001 & 0.818 $\pm$ 0.003 & 34.40 $\pm$ 1.45 \\
+Full-model FedAvg & 0 & 0.962 $\pm$ 0.000 & 0.823 $\pm$ 0.000 & 37.99 $\pm$ 0.00 \\
+ & 4 & 0.950 $\pm$ 0.003 & 0.809 $\pm$ 0.003 & 30.19 $\pm$ 0.51 \\
+Median aggregation & 0 & 0.962 $\pm$ 0.000 & 0.823 $\pm$ 0.000 & 37.99 $\pm$ 0.00 \\
+ & 4 & 0.959 $\pm$ 0.001 & 0.817 $\pm$ 0.001 & 34.63 $\pm$ 0.98 \\
+Fuzzers on 2 clients & 0 & 0.962 $\pm$ 0.000 & 0.823 $\pm$ 0.000 & 37.99 $\pm$ 0.00 \\
+ & 4 & 0.959 $\pm$ 0.001 & 0.818 $\pm$ 0.001 & 34.69 $\pm$ 0.60 \\
+Fuzzers on 3 clients & 0 & 0.962 $\pm$ 0.000 & 0.823 $\pm$ 0.000 & 37.99 $\pm$ 0.00 \\
+ & 4 & 0.957 $\pm$ 0.000 & 0.818 $\pm$ 0.001 & 34.48 $\pm$ 0.31 \\
+5$\times$ local steps & 0 & 0.962 $\pm$ 0.000 & 0.823 $\pm$ 0.000 & 37.99 $\pm$ 0.00 \\
+ & 4 & 0.956 $\pm$ 0.002 & 0.817 $\pm$ 0.001 & 33.77 $\pm$ 0.86 \\
+3 clients + 5$\times$ steps & 0 & 0.962 $\pm$ 0.000 & 0.823 $\pm$ 0.000 & 37.99 $\pm$ 0.00 \\
+ & 4 & 0.826 $\pm$ 0.115 & 0.820 $\pm$ 0.006 & 36.12 $\pm$ 2.98 \\
+\bottomrule\end{tabular}\end{table}
+
+\begin{table}[t]\centering
+\caption{Federated Fuzzers recall vs.\ the frozen backbone with only its decision threshold moved to the same benign FPR (official UNSW-NB15 test set; EC2). The frozen model needs no federation at all.}
+\label{tab:threshold}
+\begin{tabular}{lccc}\toprule
+Federated model & FPR (\%) & Fuzzers rec.\ (\%) & Frozen, threshold moved (\%) \\ \midrule
+LoRA $r{=}4$, 4 rounds & 18.28 $\pm$ 0.83 & 50.48 $\pm$ 3.16 & 51.62 \\
+LoRA $r{=}4$, Lambda path (4 seeds) & 19.21 $\pm$ 0.61 & 54.50 $\pm$ 1.92 & 53.37 \\
+LoRA $r{=}8$, 4 rounds & 21.24 $\pm$ 2.66 & 59.12 $\pm$ 6.45 & 56.96 \\
+Full-model FedAvg, 4 rounds & 33.08 $\pm$ 1.80 & 78.04 $\pm$ 3.34 & 84.00 \\
+Fuzzers on 2 clients, 4 rounds & 18.47 $\pm$ 2.19 & 51.15 $\pm$ 6.93 & 51.93 \\
+5$\times$ local steps, 4 rounds & 28.24 $\pm$ 6.83 & 71.41 $\pm$ 11.17 & 71.68 \\
+Fuzzers on 3 clients, 4 rounds & 33.56 $\pm$ 0.83 & 79.42 $\pm$ 1.40 & 85.09 \\
+3 clients + 5$\times$ steps, 4 rounds & 37.36 $\pm$ 1.44 & 87.19 $\pm$ 4.38 & 89.69 \\
+\bottomrule\end{tabular}\end{table}
+
+\begin{table*}[t]\centering
+\caption{Sensitivity of the full agent to the analyst (3 seeds; EC2). The analyst reviews a random 50\% of blocks and gives the wrong verdict with the stated probability; a wrong verdict on an attacker rolls its block back and grants it the learned exception.}
+\label{tab:analyst}
+\begin{tabular}{lcccc}\toprule
+ & \multicolumn{2}{c}{ToN\_IoT} & \multicolumn{2}{c}{UNSW-NB15} \\
+Configuration & Benign dropped (\%) & Attack unblocked (\%) & Benign dropped (\%) & Attack unblocked (\%) \\ \midrule
+C: no analyst & 28.63 $\pm$ 5.67 & 0.083 $\pm$ 0.021 & 1.42 $\pm$ 0.06 & 1.267 $\pm$ 0.119 \\
+E: oracle analyst, 30-min exception & 12.50 $\pm$ 1.91 & 0.019 $\pm$ 0.005 & 2.14 $\pm$ 0.08 & 0.132 $\pm$ 0.032 \\
+E: 50\% reviewed, 10\% wrong & 23.97 $\pm$ 4.54 & 4.543 $\pm$ 1.583 & 4.05 $\pm$ 0.32 & 3.067 $\pm$ 1.217 \\
+E: 50\% reviewed, 20\% wrong & 31.77 $\pm$ 8.34 & 11.785 $\pm$ 3.186 & 4.13 $\pm$ 0.27 & 12.362 $\pm$ 1.731 \\
+E: oracle, 5-min exception & 18.56 $\pm$ 1.58 & 0.018 $\pm$ 0.006 & 2.38 $\pm$ 0.10 & 0.132 $\pm$ 0.032 \\
+E: 10\% wrong, 5-min exception & 29.16 $\pm$ 4.45 & 1.474 $\pm$ 0.228 & 4.25 $\pm$ 0.14 & 1.063 $\pm$ 0.396 \\
+E: 20\% wrong, 5-min exception & 34.46 $\pm$ 6.44 & 4.893 $\pm$ 0.235 & 4.40 $\pm$ 0.36 & 3.049 $\pm$ 0.783 \\
+\bottomrule\end{tabular}\end{table*}
+
+\begin{table*}[t]\centering
+\caption{Reference models on the same test sets and eight features (3 seeds each; trained and evaluated on EC2). Neither is federated; they bound what the frozen backbone and the federated system are compared against.}
+\label{tab:refs}
+\begin{tabular}{lcccc}\toprule
+Model (training data) & UNSW acc. (\%) & UNSW FPR (\%) & Fuzzers rec. (\%) & ToN acc. (\%) \\ \midrule
+Gradient-boosted trees (pretraining pool, Fuzzers excluded) & 90.10 $\pm$ 0.17 & 8.92 $\pm$ 0.40 & 34.27 $\pm$ 0.25 & 99.55 $\pm$ 0.01 \\
+Centralized Transformer (all device data incl.\ Fuzzers) & 82.39 $\pm$ 0.45 & 36.38 $\pm$ 1.65 & 89.76 $\pm$ 1.74 & 98.88 $\pm$ 0.07 \\
+Backbone v1, frozen (pretraining pool) & 87.19 & 14.31 & 41.06 & 98.84 \\
+Backbone v1 + 4 LoRA rounds (federated) & 86.46 $\pm$ 0.07 & 19.21 $\pm$ 0.61 & 54.50 $\pm$ 1.92 & -- \\
+\bottomrule\end{tabular}\end{table*}
