@@ -13,7 +13,7 @@ problem -- revisit once the real canonical feature count (from
 data/scripts/partition_data.py) is known.
 
 LoRA (2026-09-21): this used to wrap linear1/linear2 with a hand-rolled
-LoRALinear (model/lora_adapter.py, now unused/dead -- delete it) at
+LoRALinear (model/lora_adapter.py, since deleted) at
 construction time, which meant central pretraining had to explicitly
 unfreeze/re-freeze the FFN base and merge the trained delta back in
 afterward (see git history / memory.md §12 for that whole saga). Replaced
@@ -43,9 +43,17 @@ torch.backends.mha.set_fastpath_enabled(False)
 
 class TabularTransformer(nn.Module):
     def __init__(self, n_continuous, cat_cardinalities, d_model=32,
-                 n_heads=4, n_layers=2, n_classes=2):
+                 n_heads=4, n_layers=2, n_classes=2, per_feature_tokens=False):
         super().__init__()
-        self.cont_proj = nn.Linear(n_continuous, d_model)
+        # per_feature_tokens=True: one token per continuous feature
+        # (FT-Transformer tokenizer, Gorishniy et al. 2021) instead of one
+        # token for all of them -- attention then has n_continuous+3 tokens.
+        self.per_feature_tokens = per_feature_tokens
+        if per_feature_tokens:
+            self.cont_weight = nn.Parameter(torch.randn(n_continuous, d_model) * 0.1)
+            self.cont_bias = nn.Parameter(torch.zeros(n_continuous, d_model))
+        else:
+            self.cont_proj = nn.Linear(n_continuous, d_model)
         self.cat_embeds = nn.ModuleList(
             [nn.Embedding(card, d_model) for card in cat_cardinalities]
         )
@@ -56,14 +64,29 @@ class TabularTransformer(nn.Module):
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         self.head = nn.Linear(d_model, n_classes)
 
-    def forward(self, x_cont, x_cat):
-        tokens = [self.cont_proj(x_cont).unsqueeze(1)]
+    def tokens(self, x_cont, x_cat):
+        if self.per_feature_tokens:
+            tokens = [x_cont.unsqueeze(-1) * self.cont_weight + self.cont_bias]
+        else:
+            tokens = [self.cont_proj(x_cont).unsqueeze(1)]
         for i, emb in enumerate(self.cat_embeds):
             tokens.append(emb(x_cat[:, i]).unsqueeze(1))
-        seq = torch.cat(tokens, dim=1)  # (batch, n_tokens, d_model)
-        encoded = self.encoder(seq)
+        return torch.cat(tokens, dim=1)  # (batch, n_tokens, d_model)
+
+    def forward(self, x_cont, x_cat):
+        encoded = self.encoder(self.tokens(x_cont, x_cat))
         pooled = encoded.mean(dim=1)
         return self.head(pooled)
+
+
+def load_backbone(path="model/backbone_frozen.pt"):
+    """The one place a checkpoint becomes a model. `arch` holds non-default
+    constructor args (e.g. per_feature_tokens); older checkpoints lack it."""
+    ckpt = torch.load(path, weights_only=False)
+    model = TabularTransformer(n_continuous=ckpt["n_continuous"],
+                               cat_cardinalities=ckpt["cat_cardinalities"], **ckpt.get("arch", {}))
+    model.load_state_dict(ckpt["model_state_dict"])
+    return model
 
 
 def wrap_with_lora(model: TabularTransformer, r: int = 4, alpha: int = 8):
@@ -90,10 +113,23 @@ def wrap_with_lora(model: TabularTransformer, r: int = 4, alpha: int = 8):
         r=r, lora_alpha=alpha,
     )
     peft_model = get_peft_model(model, config)
-    peft_model.adapter_state_dict = types.MethodType(
-        lambda self: get_peft_model_state_dict(self), peft_model)
-    peft_model.load_adapter_state_dict = types.MethodType(
-        lambda self, state: set_peft_model_state_dict(self, state), peft_model)
+    # Deliberately NOT peft's get/set_peft_model_state_dict: their handling of
+    # modules_to_save key names differs between peft versions (0.17.1 -- the
+    # newest that supports the EC2 nodes' Python 3.9 -- raises KeyError
+    # 'base_model.model.head.weight' on a state dict it produced itself).
+    # The federated payload is exactly the trainable parameters (LoRA A/B +
+    # the fully-trained head), so read/write those directly by name.
+    def _adapter_state_dict(self):
+        return {n: p.detach().clone() for n, p in self.named_parameters() if p.requires_grad}
+
+    def _load_adapter_state_dict(self, state):
+        params = dict(self.named_parameters())
+        with torch.no_grad():
+            for name, tensor in state.items():
+                params[name].copy_(tensor)
+
+    peft_model.adapter_state_dict = types.MethodType(_adapter_state_dict, peft_model)
+    peft_model.load_adapter_state_dict = types.MethodType(_load_adapter_state_dict, peft_model)
     peft_model.trainable_parameters = types.MethodType(
         lambda self: (p for p in self.parameters() if p.requires_grad), peft_model)
     return peft_model

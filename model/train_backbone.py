@@ -50,7 +50,11 @@ def load_dataset(encoder: SchemaEncoder):
     return x_cont, x_cat, labels
 
 
-def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
+def train(epochs=10, lr=1e-3, batch_size=256, device="cpu", seed=0,
+          per_feature_tokens=False, one_cycle=False, out_path=CHECKPOINT_PATH):
+    # Seeded and best-on-validation (was: unseeded, last epoch kept), so the
+    # backbone behind every reported number can be regenerated exactly.
+    torch.manual_seed(seed)
     encoder = SchemaEncoder(VOCAB_PATH, SCALER_PATH)
     x_cont, x_cat, labels = load_dataset(encoder)
 
@@ -58,13 +62,18 @@ def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
         x_cont, x_cat, labels, test_size=0.15, stratify=labels, random_state=42
     )
 
+    arch = {"per_feature_tokens": True} if per_feature_tokens else {}
     model = TabularTransformer(
         n_continuous=len(CANONICAL_CONTINUOUS),
-        cat_cardinalities=encoder.cardinalities(),
+        cat_cardinalities=encoder.cardinalities(), **arch,
     ).to(device)
 
     opt = torch.optim.Adam(model.parameters(), lr=lr)
+    sched = (torch.optim.lr_scheduler.OneCycleLR(
+        opt, max_lr=2 * lr, total_steps=epochs * ((len(y_tr) + batch_size - 1) // batch_size))
+        if one_cycle else None)
     loss_fn = nn.CrossEntropyLoss()
+    best_acc, best_state = -1.0, None
 
     n = len(y_tr)
     for epoch in range(epochs):
@@ -78,6 +87,8 @@ def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
             loss = loss_fn(logits, y_tr[idx].to(device))
             loss.backward()
             opt.step()
+            if sched:
+                sched.step()
             total_loss += loss.item() * len(idx)
 
         model.eval()
@@ -88,18 +99,30 @@ def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
             f"epoch {epoch + 1}/{epochs}  "
             f"train_loss={total_loss / n:.4f}  val_acc={val_acc:.4f}"
         )
+        if val_acc > best_acc:
+            best_acc, best_state = val_acc, {k: v.clone() for k, v in model.state_dict().items()}
 
+    model.load_state_dict(best_state)
     torch.save(
         {
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": best_state,
             "n_continuous": len(CANONICAL_CONTINUOUS),
             "cat_cardinalities": encoder.cardinalities(),
+            "arch": arch,
+            "seed": seed,
+            "best_val_acc": best_acc,
         },
-        CHECKPOINT_PATH,
+        out_path,
     )
-    print(f"saved frozen backbone -> {CHECKPOINT_PATH}")
+    print(f"saved frozen backbone -> {out_path} (best val_acc={best_acc:.4f})")
     return model
 
 
 if __name__ == "__main__":
-    train()
+    import sys
+    seed = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    if len(sys.argv) > 2 and sys.argv[2] == "v2":
+        # v2: one token per continuous feature + 30 epochs one-cycle schedule
+        train(epochs=30, seed=seed, per_feature_tokens=True, one_cycle=True)
+    else:
+        train(seed=seed)

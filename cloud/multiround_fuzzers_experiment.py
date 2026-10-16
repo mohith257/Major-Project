@@ -31,6 +31,7 @@ report uncritically.
 
 Run: python -m cloud.multiround_fuzzers_experiment
 """
+import copy
 import json
 import os
 import sys
@@ -53,7 +54,7 @@ from edge_agent.comms import _flatten_state, _unflatten_state  # noqa: E402
 from edge_agent.inference import InferenceModel, SchemaEncoder  # noqa: E402
 from edge_agent.trainer import LocalTrainer  # noqa: E402
 from model.evaluate import _load_test_df, classification_metrics, predict_all  # noqa: E402
-from model.tabular_transformer import TabularTransformer, wrap_with_lora  # noqa: E402
+from model.tabular_transformer import load_backbone, wrap_with_lora  # noqa: E402
 
 DEVICE_IDS = ["device1", "device2", "device3", "device4"]
 CUMULATIVE_FRACS = [0.25, 0.5, 0.75, 1.0]  # % of device1's 12,729 Fuzzers rows revealed, by round
@@ -94,12 +95,7 @@ def _provision_aws_resources():
 
 
 def _load_backbone():
-    ckpt = torch.load("model/backbone_frozen.pt", weights_only=False)
-    model = TabularTransformer(
-        n_continuous=ckpt["n_continuous"], cat_cardinalities=ckpt["cat_cardinalities"]
-    )
-    model.load_state_dict(ckpt["model_state_dict"])
-    return model
+    return load_backbone()
 
 
 def _encode_buffer(df, encoder):
@@ -137,12 +133,7 @@ def main():
 
         models = {}
         for did in DEVICE_IDS:
-            m = TabularTransformer(
-                n_continuous=backbone.cont_proj.in_features,
-                cat_cardinalities=[len(encoder.vocab[c]) for c in ["proto", "service", "state"]],
-            )
-            m.load_state_dict(backbone.state_dict())
-            m = wrap_with_lora(m)
+            m = wrap_with_lora(copy.deepcopy(backbone))
             models[did] = InferenceModel(m, encoder)
 
         # Devices 2/3/4 keep their existing static local buffers, unchanged

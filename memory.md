@@ -1504,3 +1504,73 @@ capability or accuracy improvement) — don't let "we migrated to a
 standard library" imply "and therefore it got better," because the
 measured data says the opposite on the one metric that matters most for
 this project's headline story.
+
+## 15. AWS-measured results, peft/Py3.9 fix, paper artifacts (2026-10-15)
+
+- EC2 nodes run Python 3.9 -> peft 0.17.1 max (laptop 0.21.0). peft's
+  get/set_peft_model_state_dict raised KeyError 'base_model.model.head.weight'
+  on nodes. Fixed in model/tabular_transformer.py: adapter_state_dict /
+  load_adapter_state_dict now copy trainable params by name (no peft funcs).
+  Payload 15,026 B (14.67 KB).
+- DynamoDB GLOBAL round state reset to round=13070, latest_global_round=0
+  (stale old-format adapter in S3 global/round10892.json; nothing deleted).
+- Experiments ran ON the 4 t3.small nodes (bundle deploy/experiments2.tar.gz,
+  scripts deploy/run_experiments.sh, run_fed.sh). Cloud side was moto-mocked
+  (same Lambda code), NOT the live API. seed 2024 OOMs when run in parallel
+  on 2 GB nodes -> run alone.
+- Frozen model: UNSW acc 87.19 / macroF1 .8706 / FPR 14.31 / Fuzzers recall
+  41.06; ToN_IoT acc 98.84 / FPR 1.93. Latency ~1.7 ms median on t3.small.
+- Federated Fuzzers, 4 seeds, round 4: recall 50.14+-2.59 (+9.08pt),
+  acc 86.36+-0.17, FPR 18.26+-0.93. Centralized baseline (4 UNSEEDED runs):
+  acc 83.5+-1.2, FPR 32.6+-3.5, Fuzzers recall 82.5+-4.8. Old 93% baseline
+  recall = lucky draw, don't cite.
+- Not met: synopsis >96% on UNSW; no adversarial eval; backbone unseeded;
+  Muthuswamy/Vijetha citations unverified.
+- Artifacts: paper_outline.md, literature_survey.md, paper_figures/ (fig1-7,
+  make_figures.py, make_fig6.py).
+- 4 EC2 instances left RUNNING (billing) -- stop when done.
+
+## 16. Bug sweep, agent redesign, ablations (2026-10-15/16)
+
+Bugs fixed (all verified with cloud/local_simulation.py):
+- LocalTrainer val split took the first 15% of class-SORTED device CSVs ->
+  val was 100% attack, whole classes never trained. Now shuffled (seed 0).
+  Invalidated every federated number before this date; all rerun on EC2.
+- Agent: self-eval re-scored ~100K rows on every benign flow + retrain storm
+  (now 60 s / 300 s rate limits); drift window not cleared after retrain;
+  SYNC starved under sustained attack (now independent of the flow).
+- comms: any network error crashed the agent (now logged, returns None).
+- aggregate: failed/empty aggregation left round stuck in "aggregating"
+  forever (release_aggregation_lock); mismatched-key uploads dropped.
+- ingest rejects n_samples<=0 / empty weights. Actuator refuses loopback/None.
+- validate_holdout.py trained on Fuzzers only (all label 1) -> fake 100%.
+- Lambdas redeployed 2026-10-15 with these fixes (backup zip in scratchpad).
+Not fixed (paper limitations): FedAvg trusts client n_samples; late upload
+during aggregation silently dropped; device data overlaps pretraining pool;
+scaler stats include ToN test rows; CORS * + full scans on read endpoints.
+
+New agent (edge_agent/policy.py, actuator.py, agent.py, triage.py):
+cost-aware Bayes action choice (costs NOOP(0,10) ALERT(1,3) BLOCK(20,0));
+graded blocks (TTL 60*2^(l-1), permanent at level 4); analyst rollback +
+30-min exception + cost update; peer intel via GET /incidents with ROLLBACK
+retraction; gated adoption of global models (acc -1pt / FPR +2pt tolerance);
+LLM triage via Bedrock (off by default; account returns "Operation not
+allowed" until Anthropic model access is enabled in console).
+Experiments: cloud/ablation_experiment.py (ranks, full, mining, FGSM,
+FedProx mu=.01, gate, poisoning, median), cloud/agent_policy_experiment.py.
+Backbone v2 = per-feature tokens + 30 ep one-cycle (model/train_backbone.py
+<seed> v2). Laptop dev: 88.57% / FPR 10.1% vs v1 87.19 / 14.31.
+Poisoning finding: gate rejects 100% of poisoned globals but isolated device
+drifts (FPR ~40%) -> added coordinate-median aggregation variant.
+Ops gotchas: 2 GB nodes OOM with moto multiround -> 2 GB swap added;
+scripts edited by Python on Windows get CRLF -> bash fails silently.
+Results pipeline: paper_figures/build_results.py reads paper_figures/aws_logs.
+
+## 17. Weak-point fixes (2026-10-16, EC2 exp10)
+- Threshold-free eval added to ablation_experiment (AUROC, Fuzzers AUROC, Fuzzers recall @10% FPR). RESULT: federation does NOT improve separation (Fuzzers AUROC .823->.818; recall@10%FPR 38.0->34.8). Frozen backbone with threshold moved to the federated FPR gives the same recall (53.4 vs 54.5 at 19.2% FPR). Full-model federation degrades ranking (AUROC .950). Paper reframed: default-threshold recall overstates federated gains.
+- model/gbm_reference.py (EC2, 3 seeds): 90.10+-0.17 acc, 8.92 FPR, Fuzzers 34.27. Centralized Transformer seeded (EC2, 3 seeds): 82.39 acc, 36.38 FPR, Fuzzers 89.76.
+- model/operating_curve.py: frozen-model recall at given FPRs (RESULT_CURVE).
+- Agent sim imperfect analyst (50% reviewed, 10/20% wrong) + exception TTL 30 vs 5 min: wrong rollbacks leak attacks (ToN 4.5% at 10% err); 5-min exception cuts ~2/3. A-E reproduce earlier numbers exactly.
+- Normalisation leak quantified: <=0.058 sigma mean shift, <=2.4% std.
+- Live backend: 12,610 rounds 2026-09-21..10-16, only 22 with all 4 devices.
+- SSM stdout truncates at 24,000 chars: collect logs in chunks (scratchpad collect10.py).

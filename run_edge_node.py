@@ -28,7 +28,16 @@ Env vars:
   DATA_DIR         default "data/processed"
   ROW_RATE_HZ      default "2.0" -- local traffic replay rate
   SYNC_POLL_SECONDS default "15"
-  BLOCK_CONFIDENCE  default "0.9"
+  BLOCK_CONFIDENCE  default "0.9" -- only used with POLICY=threshold
+  POLICY            default "cost" -- "cost" = expected-cost action choice
+                    (edge_agent/policy.py), "threshold" = original fixed rule
+  GATE_UPDATES      default "1" -- adopt a global model only if it doesn't
+                    hurt this device's own held-out accuracy/FPR
+  SHARE_INTEL       default "1" -- escalate faster on IPs peer devices blocked
+  TRIAGE            default "0" -- "1" = LLM incident summaries via Bedrock
+                    (edge_agent/triage.py), off the detection path; needs
+                    bedrock:InvokeModel on the node role (not granted by default)
+  TRIAGE_MODEL      default "global.anthropic.claude-haiku-5-5"
   REAL_BLOCK        default "0" -- "1" applies real iptables rules (Linux
                     only, see actuator.py); default stays simulate=True even
                     on Linux so a first run can't surprise-firewall the box.
@@ -61,7 +70,6 @@ import os
 import time
 
 import pandas as pd
-import torch
 
 from edge_agent.actuator import DefenseActuator
 from edge_agent.agent import EdgeAgent
@@ -69,7 +77,7 @@ from edge_agent.comms import CloudComms
 from edge_agent.drift_monitor import LocalSelfEvalTrigger, StreamDriftMonitor
 from edge_agent.inference import InferenceModel, SchemaEncoder
 from edge_agent.trainer import LocalTrainer
-from model.tabular_transformer import TabularTransformer, wrap_with_lora
+from model.tabular_transformer import load_backbone, wrap_with_lora
 
 logger = logging.getLogger("run_edge_node")
 
@@ -87,6 +95,11 @@ def load_config():
         "row_rate_hz": float(os.environ.get("ROW_RATE_HZ", "2.0")),
         "sync_poll_seconds": float(os.environ.get("SYNC_POLL_SECONDS", "15")),
         "block_confidence": float(os.environ.get("BLOCK_CONFIDENCE", "0.9")),
+        "policy": os.environ.get("POLICY", "cost"),
+        "gate_updates": os.environ.get("GATE_UPDATES", "1") == "1",
+        "share_intel": os.environ.get("SHARE_INTEL", "1") == "1",
+        "triage": os.environ.get("TRIAGE", "0") == "1",
+        "triage_model": os.environ.get("TRIAGE_MODEL", "global.anthropic.claude-haiku-5-5"),
         "real_block": os.environ.get("REAL_BLOCK", "0") == "1",
         "replay_csv": os.environ.get("REPLAY_CSV"),
         "replay_every": int(os.environ.get("REPLAY_EVERY", "20")),
@@ -99,12 +112,7 @@ def load_config():
 
 
 def build_model(encoder: SchemaEncoder, backbone_path: str) -> InferenceModel:
-    ckpt = torch.load(backbone_path, weights_only=False)
-    model = TabularTransformer(
-        n_continuous=ckpt["n_continuous"], cat_cardinalities=ckpt["cat_cardinalities"]
-    )
-    model.load_state_dict(ckpt["model_state_dict"])
-    model = wrap_with_lora(model)
+    model = wrap_with_lora(load_backbone(backbone_path))
     return InferenceModel(model, encoder)
 
 
@@ -133,8 +141,22 @@ def build_agent(cfg, encoder, model):
         actuator=actuator,
         comms=comms,
         block_confidence=cfg["block_confidence"],
+        policy=cfg["policy"],
+        gate_updates=cfg["gate_updates"],
+        share_intel=cfg["share_intel"],
         sync_poll_interval=cfg["sync_poll_seconds"],
     )
+    if cfg["triage"]:
+        # LLM triage runs in a background thread AFTER the agent has already
+        # acted -- see edge_agent/triage.py. Needs bedrock:InvokeModel.
+        from edge_agent.triage import start_triage_worker
+        submit = start_triage_worker(comms.report_incident, model_id=cfg["triage_model"])
+
+        def sink(entry):
+            comms.report_incident(entry)
+            if entry["action"] in ("BLOCK", "ALERT"):
+                submit(entry, agent.log[-5:])
+        actuator.incident_sink = sink
     return agent, local_df
 
 

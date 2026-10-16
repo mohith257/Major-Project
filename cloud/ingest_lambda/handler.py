@@ -20,6 +20,8 @@ def handler(event, context):
     device_id = body["device_id"]
     n_samples = int(body["n_samples"])
     weights = body["weights"]
+    if n_samples <= 0 or not weights:
+        return {"statusCode": 400, "body": json.dumps({"error": "n_samples must be > 0 and weights non-empty"})}
     # Each device's own locally-reported validation accuracy (see
     # edge_agent/trainer.py's docstring) -- the cloud never runs the model
     # itself, so this is the only accuracy signal that exists anywhere.

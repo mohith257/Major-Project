@@ -51,6 +51,15 @@ def decode_state(wire: dict) -> dict:
     return {name: decode_array(entry) for name, entry in wire.items()}
 
 
+def coordinate_median(states_with_weights):
+    """Byzantine-robust alternative to FedAvg (Yin et al. 2018): per-element
+    median across clients, ignoring the self-reported n_samples (which an
+    attacker controls). With K=4 one malicious client cannot move it far."""
+    names = states_with_weights[0][0].keys()
+    return {name: np.median(np.stack([s[name] for s, _ in states_with_weights]), axis=0).astype(np.float32)
+            for name in names}
+
+
 def weighted_average(states_with_weights):
     """states_with_weights: list of ({name: np.ndarray}, n_samples).
     Standard FedAvg: w_new = sum(n_i * w_i) / sum(n_i), per named tensor."""

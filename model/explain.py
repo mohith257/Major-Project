@@ -24,14 +24,19 @@ report), don't oversell it as a proof of causation.
 """
 import torch
 
+from data.scripts.partition_data import CANONICAL_CONTINUOUS
+
 TOKEN_NAMES = ["continuous_features", "proto", "service", "state"]
 
 
 def _build_tokens(model, x_cont, x_cat):
-    tokens = [model.cont_proj(x_cont).unsqueeze(1)]
-    for i, emb in enumerate(model.cat_embeds):
-        tokens.append(emb(x_cat[:, i]).unsqueeze(1))
-    return torch.cat(tokens, dim=1)  # (batch, 4, d_model)
+    return model.tokens(x_cont, x_cat)  # (batch, n_tokens, d_model)
+
+
+def token_names(model):
+    if model.per_feature_tokens:
+        return list(CANONICAL_CONTINUOUS) + TOKEN_NAMES[1:]
+    return TOKEN_NAMES
 
 
 def attention_rollout(model, x_cont, x_cat):
@@ -61,4 +66,4 @@ def attention_rollout(model, x_cont, x_cat):
         importance = rollout.sum(dim=0)  # total attention received per token
         importance = importance / importance.sum()
 
-    return {name: float(importance[i]) for i, name in enumerate(TOKEN_NAMES)}
+    return {name: float(importance[i]) for i, name in enumerate(token_names(model))}

@@ -59,9 +59,16 @@ import torch.nn.functional as F
 class LocalTrainer:
     def __init__(self, local_buffer, device="cpu", epochs=5, lr=1e-3,
                  adversarial_epsilon=0.05, val_fraction=0.15, batch_size=64,
-                 steps_per_epoch=20, max_loss_weight=3.0, weight_floor=0.3):
+                 steps_per_epoch=20, max_loss_weight=3.0, weight_floor=0.3,
+                 use_hard_mining=True, use_adversarial=True, prox_mu=0.0):  # False/0 = ablation only
         # local_buffer: list of (x_cont, x_cat, label) -- this device's own
         # analyst-labeled historical data, NOT the live unlabeled stream.
+        # Shuffle (fixed seed) BEFORE the split: device CSVs are written grouped
+        # by attack_cat (partition_data.py concatenates per-class groups), so
+        # an unshuffled "first 15%" was 100% attack rows from 1-3 classes --
+        # a meaningless val accuracy, and whole classes silently never trained on.
+        order = torch.randperm(len(local_buffer), generator=torch.Generator().manual_seed(0)).tolist()
+        local_buffer = [local_buffer[i] for i in order]
         n_val = max(1, int(len(local_buffer) * val_fraction)) if local_buffer else 0
         self.val_buffer = local_buffer[:n_val]
         self.local_buffer = local_buffer[n_val:] or local_buffer  # don't train on nothing
@@ -77,6 +84,11 @@ class LocalTrainer:
         # forgetting, not a hypothetical concern).
         self.steps_per_epoch = steps_per_epoch
         self.max_loss_weight = max_loss_weight
+        self.use_hard_mining = use_hard_mining
+        self.use_adversarial = use_adversarial
+        # FedProx (Li et al. 2020): prox_mu > 0 adds (mu/2)||w - w_start||^2 over
+        # the trainable params, w_start = the global model this retrain began from.
+        self.prox_mu = prox_mu
         self.weight_floor = weight_floor
         self.last_batch_size = 0
         self.last_val_accuracy = 0.0
@@ -108,9 +120,11 @@ class LocalTrainer:
         opt = torch.optim.Adam(model.trainable_parameters(), lr=self.lr)
         x_cont, x_cat, labels = self._batch()
         self.last_batch_size = len(labels)
+        start = [p.detach().clone() for p in model.trainable_parameters()] if self.prox_mu else None
 
         for _ in range(self.epochs):
-            weights = self._hard_example_weights(model, x_cont, x_cat, labels)
+            weights = (self._hard_example_weights(model, x_cont, x_cat, labels)
+                       if self.use_hard_mining else torch.ones(len(labels)))
             idx_pool = torch.multinomial(
                 weights, self.steps_per_epoch * self.batch_size, replacement=True
             )
@@ -122,11 +136,13 @@ class LocalTrainer:
                 clean_logits = model(x_cont[idx], x_cat[idx])
                 clean_loss = loss_fn(clean_logits, labels[idx])
 
-                adv_x_cont = self._fgsm_perturb(model, x_cont[idx], x_cat[idx], labels[idx], loss_fn)
-                adv_logits = model(adv_x_cont, x_cat[idx])
-                adv_loss = loss_fn(adv_logits, labels[idx])
-
-                loss = clean_loss + adv_loss
+                loss = clean_loss
+                if self.use_adversarial:
+                    adv_x_cont = self._fgsm_perturb(model, x_cont[idx], x_cat[idx], labels[idx], loss_fn)
+                    loss = loss + loss_fn(model(adv_x_cont, x_cat[idx]), labels[idx])
+                if start is not None:
+                    loss = loss + self.prox_mu / 2 * sum(
+                        ((p - p0) ** 2).sum() for p, p0 in zip(model.trainable_parameters(), start))
                 loss.backward()
                 opt.step()
 

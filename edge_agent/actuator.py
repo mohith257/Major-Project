@@ -4,7 +4,22 @@ edge_agent/actuator.py
 The defense side of the agent loop, kept deliberately separate from
 detection logic so BLOCK/ALERT decisions in agent.py stay testable without
 needing real root/iptables access on a dev machine.
+
+Graded response (escalate, expire, roll back) instead of one-shot permanent
+blocks: with a ~14-18% false-positive rate on UNSW-NB15, a permanent DROP on
+the first high-confidence verdict would cut off a large share of legitimate
+hosts for good. Each BLOCK verdict on an IP raises its level:
+    level 1 -> temporary block for base_ttl seconds
+    level k -> temporary block for base_ttl * 2**(k-1) seconds
+    level >= permanent_after -> permanent block
+Temporary blocks lift themselves (expire()), and rollback() undoes a block
+the analyst marks as a false positive. An IP flagged by ANOTHER device
+(shared threat intel, see agent.py) starts one level higher.
+
+All methods take `now` explicitly so the same code runs live (time.time())
+and in the replay experiments (simulated clock).
 """
+import ipaddress
 import logging
 import platform
 import subprocess
@@ -13,26 +28,70 @@ logger = logging.getLogger("actuator")
 
 
 class DefenseActuator:
-    def __init__(self, incident_sink=None, simulate=True):
+    def __init__(self, incident_sink=None, simulate=True, base_ttl=60.0, permanent_after=4):
         # simulate=True: log the block, don't touch the real firewall.
         # Only flip to False on Linux boxes where you actually want an
         # iptables rule applied (e.g. the EC2 demo nodes).
         self.simulate = simulate or platform.system() != "Linux"
         self.incident_sink = incident_sink
-        self.blocked_ips = set()
+        self.base_ttl = base_ttl
+        self.permanent_after = permanent_after
+        self.level = {}      # ip -> escalation level
+        self.blocked = {}    # ip -> expiry time (float("inf") = permanent)
 
-    def block(self, source_ip: str):
-        if source_ip in self.blocked_ips:
-            return
-        self.blocked_ips.add(source_ip)
+    @property
+    def blocked_ips(self):
+        return set(self.blocked)
+
+    def is_blocked(self, ip, now):
+        return self.blocked.get(ip, float("-inf")) > now
+
+    def block(self, source_ip, now, head_start=0):
+        """Escalate source_ip one level and (re)apply the matching block.
+        Returns the expiry time, or None if refused."""
+        # Live capture on `lo` flags 127.0.0.1 -- a real iptables DROP on it
+        # would cut the box off from itself (incl. the agent's own sockets).
+        try:
+            loopback = ipaddress.ip_address(source_ip).is_loopback
+        except ValueError:  # None, "", "-", or anything else that isn't an IP
+            loopback = True
+        if loopback:
+            logger.warning("refusing to block %r (missing or loopback)", source_ip)
+            return None
+        lvl = max(self.level.get(source_ip, 0) + 1, 1 + head_start)
+        self.level[source_ip] = lvl
+        expiry = (float("inf") if lvl >= self.permanent_after
+                  else now + self.base_ttl * 2 ** (lvl - 1))
+        already = source_ip in self.blocked
+        self.blocked[source_ip] = expiry
+        if not already:
+            self._firewall("-A", source_ip)
+        logger.warning("BLOCK %s level=%d until=%s", source_ip, lvl,
+                       "permanent" if expiry == float("inf") else round(expiry - now))
+        return expiry
+
+    def expire(self, now):
+        """Lift every temporary block whose TTL has passed. Returns the IPs lifted."""
+        lifted = [ip for ip, t in self.blocked.items() if t <= now]
+        for ip in lifted:
+            self._unblock(ip)
+        return lifted
+
+    def rollback(self, source_ip):
+        """Analyst marked the block a false positive: lift it and reset the level."""
+        self.level.pop(source_ip, None)
+        if source_ip in self.blocked:
+            self._unblock(source_ip)
+
+    def _unblock(self, ip):
+        del self.blocked[ip]
+        self._firewall("-D", ip)
+
+    def _firewall(self, op, ip):
         if self.simulate:
-            logger.warning("SIMULATED BLOCK: %s", source_ip)
-        else:
-            subprocess.run(
-                ["iptables", "-A", "INPUT", "-s", source_ip, "-j", "DROP"],
-                check=True,
-            )
-            logger.warning("BLOCKED (iptables): %s", source_ip)
+            logger.info("SIMULATED iptables %s INPUT -s %s -j DROP", op, ip)
+            return
+        subprocess.run(["iptables", op, "INPUT", "-s", ip, "-j", "DROP"], check=True)
 
     def log_incident(self, device_id, decision, explanation=None):
         entry = {

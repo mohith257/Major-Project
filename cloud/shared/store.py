@@ -139,6 +139,19 @@ def try_lock_for_aggregation(round_number: int):
         raise
 
 
+def release_aggregation_lock(round_number: int):
+    """aggregating -> collecting for this round, so a failed aggregation can
+    be retried by the next trigger instead of deadlocking the round forever
+    (aggregate_lambda skips anything not 'collecting'; ingest can't re-lock)."""
+    _dynamodb.Table(ROUND_STATE_TABLE).update_item(
+        Key=ROUND_STATE_KEY,
+        UpdateExpression="SET #s = :collecting",
+        ConditionExpression="#r = :r AND #s = :aggregating",
+        ExpressionAttributeNames={"#r": "round", "#s": "status"},
+        ExpressionAttributeValues={":collecting": "collecting", ":aggregating": "aggregating", ":r": round_number},
+    )
+
+
 def complete_round(round_number: int, participants: list, avg_val_accuracy: float = 0.0):
     """Bump to the next round, reset submitted, record history. Called
     once, only by whichever invocation won try_lock_for_aggregation."""

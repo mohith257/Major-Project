@@ -43,7 +43,7 @@ from data.scripts.partition_data import (
 )
 from edge_agent.comms import _flatten_state
 from edge_agent.inference import InferenceModel, SchemaEncoder
-from model.tabular_transformer import TabularTransformer, wrap_with_lora
+from model.tabular_transformer import load_backbone, wrap_with_lora
 
 CHECKPOINT_PATH = "model/backbone_frozen.pt"
 VOCAB_PATH = "data/processed/vocab.json"
@@ -58,12 +58,7 @@ def load_model():
     build_model()), which matters here since measure_payload_size() needs
     a real adapter_state_dict() to measure, and it keeps this evaluation
     honest about testing the same code path as production."""
-    ckpt = torch.load(CHECKPOINT_PATH, weights_only=False)
-    model = TabularTransformer(
-        n_continuous=ckpt["n_continuous"], cat_cardinalities=ckpt["cat_cardinalities"]
-    )
-    model.load_state_dict(ckpt["model_state_dict"])
-    return wrap_with_lora(model)
+    return wrap_with_lora(load_backbone(CHECKPOINT_PATH))
 
 
 def predict_all(inference_model, df, batch_size=4096):
@@ -202,4 +197,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    print("RESULT_EVAL " + json.dumps(main()))

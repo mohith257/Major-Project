@@ -54,7 +54,8 @@ def load_pooled_dataset(encoder: SchemaEncoder):
     return x_cont, x_cat, labels
 
 
-def train(epochs=10, lr=1e-3, batch_size=256, device="cpu"):
+def train(epochs=10, lr=1e-3, batch_size=256, device="cpu", seed=0):
+    torch.manual_seed(seed)  # earlier runs were unseeded: 4 runs spread 82.2-84.7% acc
     encoder = SchemaEncoder(VOCAB_PATH, SCALER_PATH)
     x_cont, x_cat, labels = load_pooled_dataset(encoder)
 
@@ -132,5 +133,8 @@ def evaluate_against_held_out(model, encoder):
 
 
 if __name__ == "__main__":
-    model, encoder = train()
-    evaluate_against_held_out(model, encoder)
+    import sys
+    import json
+    seed = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    model, encoder = train(seed=seed)
+    print("RESULT_BASELINE " + json.dumps({"seed": seed, **evaluate_against_held_out(model, encoder)}, default=float))

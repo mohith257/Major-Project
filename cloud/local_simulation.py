@@ -33,6 +33,7 @@ downstream of API Gateway, not API Gateway itself.
 
 Run: python -m cloud.local_simulation
 """
+import copy
 import json
 import os
 import sys
@@ -54,7 +55,7 @@ from moto import mock_aws  # noqa: E402
 from edge_agent.comms import _flatten_state, _unflatten_state  # noqa: E402
 from edge_agent.inference import InferenceModel, SchemaEncoder  # noqa: E402
 from edge_agent.trainer import LocalTrainer  # noqa: E402
-from model.tabular_transformer import TabularTransformer, wrap_with_lora  # noqa: E402
+from model.tabular_transformer import load_backbone, wrap_with_lora  # noqa: E402
 
 DEVICE_IDS = ["device1", "device2", "device3", "device4"]
 
@@ -90,12 +91,7 @@ def _provision_aws_resources():
 
 
 def _load_backbone():
-    ckpt = torch.load("model/backbone_frozen.pt", weights_only=False)
-    model = TabularTransformer(
-        n_continuous=ckpt["n_continuous"], cat_cardinalities=ckpt["cat_cardinalities"]
-    )
-    model.load_state_dict(ckpt["model_state_dict"])
-    return model
+    return load_backbone()
 
 
 def _load_device_buffer(device_id, encoder):
@@ -127,12 +123,7 @@ def main():
         print("Loading each device's own local buffer (independent data, never shared)...")
         devices = {}
         for did in DEVICE_IDS:
-            model = TabularTransformer(
-                n_continuous=backbone.cont_proj.in_features,
-                cat_cardinalities=[len(encoder.vocab[c]) for c in ["proto", "service", "state"]],
-            )
-            model.load_state_dict(backbone.state_dict())  # each starts identical, then diverges
-            model = wrap_with_lora(model)
+            model = wrap_with_lora(copy.deepcopy(backbone))  # each starts identical, then diverges
             inf_model = InferenceModel(model, encoder)
             buffer = _load_device_buffer(did, encoder)
             trainer = LocalTrainer(buffer, epochs=5)

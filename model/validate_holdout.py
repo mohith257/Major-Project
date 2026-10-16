@@ -14,23 +14,18 @@ import torch
 
 from edge_agent.inference import InferenceModel, SchemaEncoder
 from edge_agent.trainer import LocalTrainer
-from model.tabular_transformer import TabularTransformer, wrap_with_lora
+from model.evaluate import _load_test_df, classification_metrics, predict_all
+from model.tabular_transformer import load_backbone, wrap_with_lora
 
 CHECKPOINT_PATH = "model/backbone_frozen.pt"
 VOCAB_PATH = "data/processed/vocab.json"
 SCALER_PATH = "data/processed/scaler.json"
 REPLAY_PATH = "data/processed/holdout_replay.csv"
 DEVICE1_PATH = "data/processed/device1_train.csv"
-HOLD_OUT_ATTACK_CATEGORY_UNSW = "Fuzzers"
 
 
 def load_model():
-    ckpt = torch.load(CHECKPOINT_PATH, weights_only=False)
-    model = TabularTransformer(
-        n_continuous=ckpt["n_continuous"], cat_cardinalities=ckpt["cat_cardinalities"]
-    )
-    model.load_state_dict(ckpt["model_state_dict"])
-    return wrap_with_lora(model)
+    return wrap_with_lora(load_backbone(CHECKPOINT_PATH))
 
 
 def evaluate_on_replay(inference_model, encoder, replay_df):
@@ -53,11 +48,16 @@ def main():
     print(f"BEFORE any device 1 retrain: replay-set detection accuracy = {before_acc:.3f} "
           f"(this is what devices 2-4 would see live)")
 
+    # Device 1's FULL mixed local buffer, as EdgeAgent actually retrains on.
+    # An earlier version trained on the Fuzzers rows alone -- every label was
+    # 1, so the model learned "everything is an attack" and this script
+    # printed a meaningless 100%. Report test FPR too so a collapse is visible.
     device1_df = pd.read_csv(DEVICE1_PATH)
-    backdoor_rows = device1_df[device1_df["attack_cat"] == HOLD_OUT_ATTACK_CATEGORY_UNSW]
     local_buffer = [
-        (*encoder.encode_row(row), int(row["label"])) for _, row in backdoor_rows.iterrows()
+        (*encoder.encode_row(row), int(row["label"])) for _, row in device1_df.iterrows()
     ]
+    test_df = _load_test_df()
+    before = classification_metrics(*predict_all(inference_model, test_df))
 
     trainer = LocalTrainer(local_buffer, epochs=5)
     new_adapter = trainer.local_retrain(inference_model)
@@ -67,6 +67,9 @@ def main():
     print(f"AFTER device 1's local retrain (adapter uploaded, imagine FedAvg + "
           f"broadcast happened): replay-set detection accuracy = {after_acc:.3f}")
     print(f"delta: {after_acc - before_acc:+.3f}")
+    after = classification_metrics(*predict_all(inference_model, test_df))
+    print(f"official test: acc {before['accuracy']:.4f} -> {after['accuracy']:.4f}, "
+          f"FPR {before['false_positive_rate']:.4f} -> {after['false_positive_rate']:.4f}")
 
 
 if __name__ == "__main__":

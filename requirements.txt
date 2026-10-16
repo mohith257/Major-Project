@@ -4,6 +4,11 @@ pandas
 scikit-learn
 requests
 boto3
+# EC2 nodes run Python 3.9, where 0.17.1 is the newest peft available; the
+# laptop had 0.21.0. Keep this range -- adapter (de)serialization in
+# model/tabular_transformer.py deliberately avoids peft's own state-dict
+# functions because they differ across exactly these versions.
+peft>=0.17.1,<0.22
 
 # dev-only: needed to run cloud/local_simulation.py (mocks DynamoDB/S3
 # locally, never touches real AWS or ships to edge devices/Lambda)
