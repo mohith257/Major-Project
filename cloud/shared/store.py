@@ -22,6 +22,7 @@ import time
 from decimal import Decimal
 
 import boto3
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 
@@ -66,6 +67,7 @@ INCIDENTS_TABLE = os.environ["INCIDENTS_TABLE"]
 BUCKET = os.environ["WEIGHTS_BUCKET"]
 EXPECTED_DEVICES = int(os.environ.get("EXPECTED_DEVICES", "4"))
 ROUND_TIMEOUT_SECONDS = int(os.environ.get("ROUND_TIMEOUT_SECONDS", "30"))
+INCIDENT_TTL_SECONDS = int(os.environ.get("INCIDENT_TTL_SECONDS", str(7 * 24 * 3600)))
 
 _dynamodb = boto3.resource("dynamodb")
 _s3 = boto3.client("s3")
@@ -208,19 +210,47 @@ def _scan_all(table, cap=100000):
 def list_rounds(limit: int = 50):
     """Most recent completed rounds first -- what the dashboard's accuracy
     chart and per-round contribution view are built from."""
-    table = _dynamodb.Table(ROUNDS_TABLE)
-    items = _scan_all(table)
+    # BatchGet backwards from latest_global_round instead of _scan_all --
+    # round is the hash key, so the newest rounds are directly addressable.
+    # Round numbers can have gaps (a failed aggregation never writes its
+    # row), hence the bounded multi-batch window rather than exactly
+    # `limit` keys.
+    # Plain get_item, not get_round_state() -- that one writes a default
+    # row when missing, and RoundsFunction only has read access.
+    state = _dynamodb.Table(ROUND_STATE_TABLE).get_item(Key=ROUND_STATE_KEY).get("Item") or {}
+    hi = int(state.get("latest_global_round", 0))
+    items = []
+    for _ in range(5):
+        if hi < 1 or len(items) >= limit:
+            break
+        request = {ROUNDS_TABLE: {"Keys": [{"round": r} for r in range(hi, max(hi - 100, 0), -1)]}}
+        while request:
+            resp = _dynamodb.batch_get_item(RequestItems=request)
+            items.extend(resp["Responses"].get(ROUNDS_TABLE, []))
+            request = resp.get("UnprocessedKeys")
+        hi -= 100
     items.sort(key=lambda r: r["round"], reverse=True)
-    return items[:limit]
+    return _to_native(items[:limit])
 
 
 def list_incidents(limit: int = 100):
     """Most recent incidents first, across all devices -- the dashboard's
-    live incident feed."""
+    live incident feed. Queries each device's partition newest-first
+    (key schema is device_id + timestamp) instead of _scan_all: by
+    2026-10-23 the table held 2.2M items, so the 100k scan cap returned a
+    stale partition's rows and never reached the current ones."""
     table = _dynamodb.Table(INCIDENTS_TABLE)
-    items = _scan_all(table)
+    device_ids = [f"device{n}" for n in range(1, int(os.environ.get("EXPECTED_DEVICES", "4")) + 1)]
+    items = []
+    for device_id in device_ids + ["unknown"]:
+        resp = table.query(
+            KeyConditionExpression=Key("device_id").eq(device_id),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        items.extend(resp.get("Items", []))
     items.sort(key=lambda i: i.get("timestamp", 0), reverse=True)
-    return items[:limit]
+    return _to_native(items[:limit])
 
 
 def put_update_weights(round_number: int, device_id: str, submission: dict):
@@ -263,4 +293,7 @@ def put_incident(entry: dict):
     entry = dict(entry)
     entry.setdefault("device_id", "unknown")
     entry.setdefault("timestamp", int(time.time() * 1000))
+    # DynamoDB TTL (template.yaml IncidentsTable) -- replayed demo traffic
+    # grew this table to 2.2M rows with nothing ever expiring.
+    entry["expires_at"] = int(time.time()) + INCIDENT_TTL_SECONDS
     _dynamodb.Table(INCIDENTS_TABLE).put_item(Item=_to_dynamo(entry))

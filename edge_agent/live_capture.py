@@ -140,6 +140,9 @@ class _Flow:
             "service": _service_for(self.dport, self.sport),
             "state": self._state(),
             "src_ip": self.src_ip, "dst_ip": self.dst_ip,
+            # not model inputs -- evidence for edge_agent/investigator.py
+            # (port fan-out is what separates a scan from one odd flow)
+            "src_port": self.sport, "dst_port": self.dport,
         })
 
 

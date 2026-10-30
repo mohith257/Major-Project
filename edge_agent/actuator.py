@@ -91,7 +91,18 @@ class DefenseActuator:
         if self.simulate:
             logger.info("SIMULATED iptables %s INPUT -s %s -j DROP", op, ip)
             return
-        subprocess.run(["iptables", op, "INPUT", "-s", ip, "-j", "DROP"], check=True)
+        # A real firewall call must never take down detection: the run loop
+        # only catches KeyboardInterrupt, so a missing binary or a permissions
+        # error here used to crash the agent (and lose its in-memory state on
+        # the systemd restart). Log and carry on instead -- the verdict is
+        # still recorded and reported; only the kernel rule didn't apply.
+        try:
+            subprocess.run(["iptables", op, "INPUT", "-s", ip, "-j", "DROP"],
+                           check=True, capture_output=True, text=True, timeout=5)
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+            detail = getattr(e, "stderr", "") or ""
+            logger.error("firewall %s %s failed (block recorded, rule NOT applied): %s %s",
+                         op, ip, type(e).__name__, detail.strip())
 
     def log_incident(self, device_id, decision, explanation=None):
         entry = {

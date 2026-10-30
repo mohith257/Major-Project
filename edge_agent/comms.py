@@ -120,7 +120,7 @@ class CloudComms:
         flow data."""
         try:
             resp = requests.get(f"{self.api_base_url}/incidents", headers=self.headers,
-                                params={"limit": 200}, timeout=10)
+                                params={"limit": 3000}, timeout=10)
             resp.raise_for_status()
         except requests.RequestException as e:
             logger.warning("peer-intel fetch failed: %s", e)

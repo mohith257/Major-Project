@@ -362,9 +362,12 @@ if agent:
         ax.set_xticks(x)
         ax.set_xticklabels([c[0] for c in cfg_label])
         ax.set_title("ToN_IoT (real IPs)" if stream == "ton" else "UNSW-NB15 (synthetic sessions)")
-        ax.set_xlabel("agent configuration A->E")
-        ax.legend([b1, b2], ["benign dropped (left axis)", "attacks not blocked (right axis)"], fontsize=8)
-    fig.tight_layout()
+        ax.set_xlabel("agent configuration")
+        ax2.set_ylim(0, ax2.get_ylim()[1] * 1.35)  # headroom so the legend never covers a bar
+        ax.set_ylim(0, ax.get_ylim()[1] * 1.35)
+        ax.legend([b1, b2], ["benign dropped (left axis)", "attacks not blocked (right axis)"], fontsize=8, loc="upper right")
+    fig.text(0.5, 0.01, "   ".join(v.replace("\\&", "&") for v in cfg_label.values()), ha="center", fontsize=8)
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
     fig.savefig(f"{OUT}/fig4_agent_bars.png", dpi=200)
 
 print(f"parsed {len(results)} RESULT runs, {len(multi)} multiround seeds -> {OUT}/results_tables.tex")

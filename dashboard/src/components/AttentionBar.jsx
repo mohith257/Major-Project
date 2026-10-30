@@ -10,10 +10,24 @@ const TOKEN_LABELS = {
 }
 
 const TOKEN_COLORS = {
-  continuous_features: '#4fd1c5',
-  proto: '#7c9eff',
-  service: '#ffb84f',
-  state: '#ff6b6b',
+  continuous_features: '#0d9488',
+  proto: '#3b6ea5',
+  service: '#c07512',
+  state: '#d64545',
+}
+
+export function AttentionLegend() {
+  return (
+    <div className="attn-legend">
+      <span className="attn-legend-title">Why =</span>
+      {Object.entries(TOKEN_LABELS).map(([k, label]) => (
+        <span key={k} className="attn-legend-item">
+          <span className="attn-legend-swatch" style={{ background: TOKEN_COLORS[k] }} />
+          {label}
+        </span>
+      ))}
+    </div>
+  )
 }
 
 export default function AttentionBar({ attention }) {

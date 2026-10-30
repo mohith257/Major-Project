@@ -30,7 +30,17 @@ Env vars:
   SYNC_POLL_SECONDS default "15"
   BLOCK_CONFIDENCE  default "0.9" -- only used with POLICY=threshold
   POLICY            default "cost" -- "cost" = expected-cost action choice
-                    (edge_agent/policy.py), "threshold" = original fixed rule
+                    (edge_agent/policy.py), "threshold" = original fixed rule,
+                    "bandit" = learned LinUCB policy (edge_agent/bandit.py)
+                    that also decides when to INVESTIGATE
+  BANDIT_PRIOR      default "model/bandit_prior.npz" -- starting state if this
+                    device has none yet (cloud/bandit_experiment.py --prior)
+  BANDIT_STATE      default "model/bandit_<DEVICE_ID>.npz" -- loaded if present,
+                    saved on exit; merge devices' files with
+                    `python -m edge_agent.bandit merge OUT IN1 IN2 ...`
+  BANDIT_ALPHA      default "0.5" -- LinUCB exploration bonus
+  BANDIT_PRIOR_WEIGHT default "500" -- the prior is loaded as if learned from
+                    this many flows, so live feedback can override it
   GATE_UPDATES      default "1" -- adopt a global model only if it doesn't
                     hurt this device's own held-out accuracy/FPR
   SHARE_INTEL       default "1" -- escalate faster on IPs peer devices blocked
@@ -38,6 +48,12 @@ Env vars:
                     (edge_agent/triage.py), off the detection path; needs
                     bedrock:InvokeModel on the node role (not granted by default)
   TRIAGE_MODEL      default "global.anthropic.claude-haiku-5-5"
+  INVESTIGATE       default "0" -- "1" = flows the cost policy would only
+                    ALERT on are investigated by Claude with tools over this
+                    device's per-source flow history (edge_agent/investigator.py)
+                    before block/alert/allow/escalate; needs bedrock:InvokeModel
+  INVESTIGATE_MODEL default "anthropic.claude-haiku-5-5" (Bedrock Mantle ID)
+  BEDROCK_REGION    default "ap-south-1"
   REAL_BLOCK        default "0" -- "1" applies real iptables rules (Linux
                     only, see actuator.py); default stays simulate=True even
                     on Linux so a first run can't surprise-firewall the box.
@@ -51,7 +67,8 @@ Env vars:
                     (Npcap on Windows). REPLAY_CSV/REPLAY_EVERY are ignored
                     when this is on -- the live stream IS the traffic.
   CAPTURE_IFACE     optional, e.g. "Npcap Loopback Adapter" (Windows) or
-                    "lo" (Linux). Default: scapy's default interface.
+                    "lo" (Linux); comma-separated for several, e.g.
+                    "veth-h,ens5". Default: scapy's default interface.
   CAPTURE_FILTER    default "tcp or udp or icmp" -- a BPF filter. Narrow
                     this (e.g. exclude your API's host/port, or capture on
                     loopback only) so this process's own HTTPS calls to
@@ -62,19 +79,31 @@ Env vars:
                     benign (NOOP) verdicts to the cloud so the dashboard
                     shows continuous live assessment, not just alerts.
                     BLOCK/ALERT/RETRAIN/MISS are always reported in full.
+  FED_INTERVAL      default "120" -- seconds between scheduled federated
+                    contributions (train on local data, upload adapter),
+                    aligned to wall-clock boundaries so all nodes land in
+                    the same round. "0" = upload only on RETRAIN (old).
+  REPORT_MIN_INTERVAL default "10" -- at most one cloud incident per
+                    (action, source_ip) per this many seconds. The local
+                    log still gets every decision. Without it a scan posts
+                    one incident per flow and trips the API's 10 rps limit.
 
 Run: python run_edge_node.py
 """
+import ipaddress
 import logging
 import os
+import threading
 import time
 
 import pandas as pd
 
 from edge_agent.actuator import DefenseActuator
 from edge_agent.agent import EdgeAgent
+from edge_agent.bandit import LinUCB
 from edge_agent.comms import CloudComms
 from edge_agent.drift_monitor import LocalSelfEvalTrigger, StreamDriftMonitor
+from edge_agent.flow_history import FlowHistory
 from edge_agent.inference import InferenceModel, SchemaEncoder
 from edge_agent.trainer import LocalTrainer
 from model.tabular_transformer import load_backbone, wrap_with_lora
@@ -87,6 +116,7 @@ def load_config():
     api_base_url = os.environ["API_BASE_URL"]
     api_key = os.environ["API_KEY"]
     data_dir = os.environ.get("DATA_DIR", "data/processed")
+    ifaces = [i for i in os.environ.get("CAPTURE_IFACE", "").split(",") if i]
     return {
         "device_id": device_id,
         "api_base_url": api_base_url,
@@ -98,17 +128,48 @@ def load_config():
         "policy": os.environ.get("POLICY", "cost"),
         "gate_updates": os.environ.get("GATE_UPDATES", "1") == "1",
         "share_intel": os.environ.get("SHARE_INTEL", "1") == "1",
+        "intel_scope_cidr": os.environ.get("INTEL_SCOPE_CIDR") or None,
         "triage": os.environ.get("TRIAGE", "0") == "1",
         "triage_model": os.environ.get("TRIAGE_MODEL", "global.anthropic.claude-haiku-5-5"),
+        "investigate": os.environ.get("INVESTIGATE", "0") == "1",
+        "investigate_model": os.environ.get("INVESTIGATE_MODEL", "anthropic.claude-haiku-5-5"),
+        "bedrock_region": os.environ.get("BEDROCK_REGION", "ap-south-1"),
+        "bandit_prior": os.environ.get("BANDIT_PRIOR", "model/bandit_prior.npz"),
+        "bandit_state": os.environ.get("BANDIT_STATE", f"model/bandit_{device_id}.npz"),
+        "bandit_alpha": float(os.environ.get("BANDIT_ALPHA", "0.5")),
+        "bandit_prior_weight": int(os.environ.get("BANDIT_PRIOR_WEIGHT", "500")),
         "real_block": os.environ.get("REAL_BLOCK", "0") == "1",
         "replay_csv": os.environ.get("REPLAY_CSV"),
         "replay_every": int(os.environ.get("REPLAY_EVERY", "20")),
         "live_capture": os.environ.get("LIVE_CAPTURE", "0") == "1",
-        "capture_iface": os.environ.get("CAPTURE_IFACE") or None,
+        # comma-separated = capture on several interfaces at once (e.g. the
+        # netns sandbox AND the internet-facing NIC)
+        "capture_iface": ifaces if len(ifaces) > 1 else (ifaces[0] if ifaces else None),
         "capture_filter": os.environ.get("CAPTURE_FILTER", "tcp or udp or icmp"),
         "flow_timeout": float(os.environ.get("FLOW_TIMEOUT", "2.0")),
         "report_clear_every": int(os.environ.get("REPORT_CLEAR_EVERY", "5")),
+        "fed_interval": float(os.environ.get("FED_INTERVAL", "120")),
+        "report_min_interval": float(os.environ.get("REPORT_MIN_INTERVAL", "10")),
     }
+
+
+def rate_limited(send, min_interval):
+    """Wrap an incident sink: drop repeats of the same (action, source_ip)
+    inside min_interval seconds. Entries without a source IP (FL_UPLOAD,
+    SYNC_DOWNLOAD, RETRAIN) always go through."""
+    last = {}
+    lock = threading.Lock()
+
+    def sink(entry):
+        ip = entry.get("source_ip")
+        if ip and min_interval > 0:
+            key, now = (entry.get("action"), ip), time.time()
+            with lock:
+                if now - last.get(key, 0) < min_interval:
+                    return
+                last[key] = now
+        send(entry)
+    return sink
 
 
 def build_model(encoder: SchemaEncoder, backbone_path: str) -> InferenceModel:
@@ -125,12 +186,28 @@ def build_agent(cfg, encoder, model):
     local_buffer = encode_buffer(local_df, encoder)
 
     comms = CloudComms(cfg["api_base_url"], cfg["api_key"], cfg["device_id"])
-    actuator = DefenseActuator(
-        incident_sink=comms.report_incident, simulate=not cfg["real_block"]
-    )
+    report = rate_limited(comms.report_incident, cfg["report_min_interval"])
+    actuator = DefenseActuator(incident_sink=report, simulate=not cfg["real_block"])
     trainer = LocalTrainer(local_buffer)
     drift_monitor = StreamDriftMonitor()
     self_eval_trigger = LocalSelfEvalTrigger()
+
+    # one per-source flow history, shared by the bandit (context features)
+    # and the investigator (tool results)
+    history = FlowHistory() if cfg["investigate"] or cfg["policy"] == "bandit" else None
+    bandit = None
+    if cfg["policy"] == "bandit":
+        # Learned action policy (edge_agent/bandit.py), starting from the
+        # federated prior (cloud/bandit_experiment.py --prior) or this
+        # device's own saved state, and learning online from here.
+        if os.path.exists(cfg["bandit_state"]):  # this device's own learned state
+            path, bandit = cfg["bandit_state"], LinUCB.load(cfg["bandit_state"], alpha=cfg["bandit_alpha"])
+        elif os.path.exists(cfg["bandit_prior"]):  # shared prior, discounted so live feedback can move it
+            path, bandit = cfg["bandit_prior"], LinUCB.load(cfg["bandit_prior"], alpha=cfg["bandit_alpha"],
+                                                            max_weight=cfg["bandit_prior_weight"])
+        else:
+            path, bandit = "(none: cold start, will learn slowly)", LinUCB(alpha=cfg["bandit_alpha"])
+        logger.info("bandit policy: start state=%s (%d effective updates)", path, bandit.n_updates)
 
     agent = EdgeAgent(
         device_id=cfg["device_id"],
@@ -145,7 +222,19 @@ def build_agent(cfg, encoder, model):
         gate_updates=cfg["gate_updates"],
         share_intel=cfg["share_intel"],
         sync_poll_interval=cfg["sync_poll_seconds"],
+        history=history,
+        bandit=bandit,
+        intel_scope=ipaddress.ip_network(cfg["intel_scope_cidr"]) if cfg["intel_scope_cidr"] else None,
+        fed_interval=cfg["fed_interval"],
     )
+    if cfg["investigate"]:
+        # Uncertain flows go to a Claude investigator that gathers per-source
+        # evidence with tools before acting -- see edge_agent/investigator.py.
+        # Needs bedrock:InvokeModel.
+        from edge_agent.investigator import Investigator
+        agent.investigator = Investigator(history, agent.threat_intel,
+                                          region=cfg["bedrock_region"],
+                                          model_id=cfg["investigate_model"])
     if cfg["triage"]:
         # LLM triage runs in a background thread AFTER the agent has already
         # acted -- see edge_agent/triage.py. Needs bedrock:InvokeModel.
@@ -153,11 +242,11 @@ def build_agent(cfg, encoder, model):
         submit = start_triage_worker(comms.report_incident, model_id=cfg["triage_model"])
 
         def sink(entry):
-            comms.report_incident(entry)
+            report(entry)
             if entry["action"] in ("BLOCK", "ALERT"):
                 submit(entry, agent.log[-5:])
         actuator.incident_sink = sink
-    return agent, local_df
+    return agent, local_df, report
 
 
 def traffic_stream(local_df: pd.DataFrame, replay_df, replay_every: int):
@@ -189,7 +278,18 @@ def main():
 
     encoder = SchemaEncoder(f"{cfg['data_dir']}/vocab.json", f"{cfg['data_dir']}/scaler.json")
     model = build_model(encoder, "model/backbone_frozen.pt")
-    agent, local_df = build_agent(cfg, encoder, model)
+    agent, local_df, report = build_agent(cfg, encoder, model)
+
+    def housekeeping():
+        while True:
+            try:
+                agent.tick()
+            except Exception:  # never let a sync/upload error kill the thread
+                logger.exception("housekeeping tick failed")
+            time.sleep(1.0)
+    threading.Thread(target=housekeeping, daemon=True).start()
+    logger.info("housekeeping thread up: sync every %ss, federated contribution every %ss",
+                cfg["sync_poll_seconds"], cfg["fed_interval"] or "(RETRAIN only)")
 
     if cfg["live_capture"]:
         # Real sniffed traffic IS the stream -- no CSV replay, no pacing
@@ -236,7 +336,7 @@ def main():
             if cfg["live_capture"] and decision.action.name == "NOOP":
                 clear_count += 1
                 if clear_count % cfg["report_clear_every"] == 0:
-                    agent.comms.report_incident({
+                    report({
                         "device_id": cfg["device_id"],
                         "action": "NOOP",
                         "reason": "live flow classified benign",
@@ -252,7 +352,7 @@ def main():
             if is_replay and int(row["label"]) == 1 and decision.action.name not in ("BLOCK", "ALERT"):
                 logger.info("MISS: hold-out attack replayed, not caught (action=%s conf=%s)",
                             decision.action.name, confidence)
-                agent.comms.report_incident({
+                report({
                     "device_id": cfg["device_id"],
                     "action": "MISS",
                     "reason": "hold-out attack replayed, model predicted benign",
@@ -263,6 +363,10 @@ def main():
                 time.sleep(sleep_s)
     except KeyboardInterrupt:
         logger.info("stopped after %d steps", n_steps)
+    finally:
+        if agent.bandit is not None:
+            agent.bandit.save(cfg["bandit_state"])
+            logger.info("bandit state saved to %s (%d updates)", cfg["bandit_state"], agent.bandit.n_updates)
 
 
 if __name__ == "__main__":

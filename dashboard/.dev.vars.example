@@ -1,0 +1,7 @@
+# Copy to .dev.vars (gitignored) to test the Cloudflare proxy locally with
+#   npm run build && npx wrangler pages dev dist
+# These are SERVER-SIDE vars for the Pages Function — NOT VITE_ prefixed, so
+# they never get inlined into the browser bundle. Same values you'll put in
+# the Cloudflare dashboard (Settings -> Environment variables).
+API_BASE_URL=https://xxxxxxxx.execute-api.ap-south-1.amazonaws.com/prod
+API_KEY=your-api-gateway-key

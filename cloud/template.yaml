@@ -101,6 +101,9 @@ Resources:
           KeyType: HASH
         - AttributeName: timestamp
           KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
 
   # All 4 functions share CodeUri: ./ (the cloud/ directory itself, i.e.
   # everything template.yaml sits next to) rather than each function's own
@@ -178,6 +181,8 @@ Resources:
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref RoundsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref RoundStateTable
       Events:
         GetRounds:
           Type: Api

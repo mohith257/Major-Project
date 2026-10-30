@@ -27,3 +27,11 @@ Thumbs.db
 # one-off deploy artifacts -- never belong in version control.
 .claude/
 fedgrid-cloud-deploy.zip
+dashboard/.dev.vars
+
+# Wrangler / Cloudflare Pages local deploy cache
+.wrangler/
+dashboard/.wrangler/
+
+# Regenerable demo-video intermediates (keep the final mp4/srt, not frames/wavs)
+demo_video/build/

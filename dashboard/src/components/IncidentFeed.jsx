@@ -1,4 +1,4 @@
-import AttentionBar from './AttentionBar.jsx'
+import AttentionBar, { AttentionLegend } from './AttentionBar.jsx'
 
 function formatTime(ts) {
   if (!ts) return '-'
@@ -14,6 +14,7 @@ export default function IncidentFeed({ incidents }) {
         an attention-rollout explanation of which input features drove the
         call (heuristic attribution, not a causal proof -- hover a bar).
       </p>
+      <AttentionLegend />
       <div className="table-wrap">
         <table>
           <thead>
@@ -21,6 +22,7 @@ export default function IncidentFeed({ incidents }) {
               <th>Time</th>
               <th>Device</th>
               <th>Action</th>
+              <th>Type</th>
               <th>Confidence</th>
               <th>Source IP</th>
               <th>Why</th>
@@ -45,6 +47,15 @@ export default function IncidentFeed({ incidents }) {
                     {inc.action}
                   </span>
                 </td>
+                <td>
+                  {inc.attack_type
+                    ? <span className="type-tag" title={
+                        inc.attack_type_true && inc.attack_type_true !== inc.attack_type
+                          ? `predicted ${inc.attack_type}, actually ${inc.attack_type_true}`
+                          : `type: ${inc.attack_type}`
+                      }>{inc.attack_type}</span>
+                    : <span className="type-na">n/a</span>}
+                </td>
                 <td>{inc.confidence != null ? `${(inc.confidence * 100).toFixed(0)}%` : '-'}</td>
                 <td>{inc.source_ip || '-'}</td>
                 <td><AttentionBar attention={inc.attention} /></td>
@@ -53,7 +64,7 @@ export default function IncidentFeed({ incidents }) {
             ))}
             {incidents.length === 0 && (
               <tr>
-                <td colSpan="7" className="empty">No incidents yet.</td>
+                <td colSpan="8" className="empty">No incidents yet.</td>
               </tr>
             )}
           </tbody>

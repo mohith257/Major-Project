@@ -83,14 +83,20 @@ box(ax, (4.0, 2.2), (1.5, 1.0), "API Gateway\nAPI key / device\n10 req/s plan", 
 lam = [("POST /update\nIngest Lambda", 4.55), ("GET /model\nModel Lambda", 3.75), ("POST /incidents\nIncident Lambda", 2.95), ("GET /rounds, /incidents\nRead Lambdas", 2.15)]
 for t, y in lam: box(ax, (6.2, y-0.35), (1.7, 0.7), t, "#fef9c3", "#ca8a04", 7.5)
 box(ax, (6.2, 0.9), (1.7, 0.7), "Aggregate Lambda\nEventBridge rate(1 min)\nFedAvg", "#fef9c3", "#ca8a04", 7.2)
-box(ax, (8.4, 3.5), (1.4, 0.9), "DynamoDB\nround state\nrounds · incidents", "#fae8ff", "#a21caf", 7.5)
-box(ax, (8.4, 1.5), (1.4, 0.9), "S3\nupdates/ · global/\nadapter weights", "#fae8ff", "#a21caf", 7.5)
-box(ax, (8.4, 0.4), (1.4, 0.7), "React dashboard\n(incidents + rollout)", "#e0f2fe", "#0284c7", 7.2)
+box(ax, (8.5, 3.3), (1.4, 1.1), "DynamoDB\nround-state · rounds\n· incidents tables", "#fae8ff", "#a21caf", 7.3)
+box(ax, (8.5, 1.2), (1.4, 0.9), "S3\nupdates/ · global/\nadapter weights", "#fae8ff", "#a21caf", 7.5)
+box(ax, (4.0, 0.55), (1.5, 0.75), "React dashboard\n(Cloudflare Pages,\nread-only proxy)", "#e0f2fe", "#0284c7", 7.0)
 arrow(ax, (3.3, 2.7), (4.0, 2.7), "HTTPS", 0.18)
+arrow(ax, (4.75, 1.3), (4.75, 2.2)); ax.text(4.82, 1.72, "GET only", fontsize=7, color="#374151")
 for t, y in lam: arrow(ax, (5.5, 2.7), (6.2, y))
-arrow(ax, (7.9, 4.55), (8.4, 3.95)); arrow(ax, (7.9, 3.75), (8.4, 2.1)); arrow(ax, (7.9, 1.25), (8.4, 1.9)); arrow(ax, (7.9, 1.25), (8.4, 3.6))
-arrow(ax, (9.1, 1.5), (9.1, 1.1))
-ax.text(5.0, 0.15, "Only LoRA adapter weights (~10.3 KB) and incident metadata leave the node; raw flows never do.", ha="center", fontsize=8.5, style="italic")
+# arrows = direction of data flow, matching each Lambda's IAM policy in cloud/template.yaml
+arrow(ax, (7.9, 4.65), (8.5, 4.2)); arrow(ax, (7.9, 4.45), (8.5, 2.0))   # ingest -> round state, update object
+arrow(ax, (8.5, 3.9), (7.9, 3.85)); arrow(ax, (8.5, 1.8), (7.9, 3.6))    # model <- round state, global adapter
+arrow(ax, (7.9, 3.0), (8.5, 3.6))                                          # incident -> incidents table
+arrow(ax, (8.5, 3.4), (7.9, 2.2))                                          # read lambdas <- tables
+for b in ((8.5, 3.45), (8.5, 1.4)):                                        # aggregate <-> round state, S3
+    ax.add_patch(FancyArrowPatch((7.9, 1.25), b, arrowstyle="<|-|>", mutation_scale=11, lw=1.2, color="#374151"))
+ax.text(5.0, 0.15, "Only LoRA adapter weights (~10.3 KB) and incident metadata leave the node; raw flows never do. Arrows show data flow.", ha="center", fontsize=8.5, style="italic")
 fig.savefig("fig1_infrastructure.png", bbox_inches="tight"); plt.close(fig)
 
 # Fig 2: edge-agent loop
